@@ -222,16 +222,16 @@
 - `base_snr_db`
 - `snr_min_db`
 - `snr_max_db`
-- `per_u_slot_prb_cap`
+- `edge_per_u_slot_prb_cap`
 
 其中：
 
 - `user_class` 取值至少包括 `center` 和 `edge`。
 - `base_snr_db` 表示该用户长期平均覆盖质量。
 - `snr_min_db` 与 `snr_max_db` 用于约束第一阶段的平稳波动范围。
-- `per_u_slot_prb_cap` 第一阶段视为每个 `UE` 的固定上限，不随 `slot` 动态变化。
+- `edge_per_u_slot_prb_cap` 仅对边缘用户生效，第一阶段视为固定上限，不随 `slot` 动态变化。
 
-边缘用户通过更低 `base_snr_db`、更低或更受限的单 `slot PRB` 上限体现“弱信道 + 长包多时隙发送”的特征。
+边缘用户通过更低 `base_snr_db` 与受限的单 `slot PRB` 上限体现“弱信道 + 长包多时隙发送”的特征；中心用户第一阶段不受该上限约束。
 
 ### 5.5 CurrentRadioState
 
@@ -248,7 +248,7 @@
 
 - `snr_db` 与 `mcs_index` 用于保留更贴近真实链路的解释性。
 - `bits_per_prb` 是排序与发送预算计算直接消费的核心字段。
-- `per_u_slot_prb_cap` 第一阶段通常直接继承自静态 `RadioProfile`，保持固定不变。
+- `per_u_slot_prb_cap` 在边缘用户上直接继承自静态 `RadioProfile`；中心用户可视为无上限或由系统总资源自然约束。
 
 ### 5.6 ActiveQueue
 
@@ -296,15 +296,15 @@
 
 - `user_class`
 - `base_snr_db`
-- `per_u_slot_prb_cap`
+- 边缘用户的 `edge_per_u_slot_prb_cap`
 - 可选的 `distance_bucket` 或等效路径损耗参数
 - 可选的用户固定偏置项 `user_bias_db`
 
 其中：
 
-- 中心用户具有更高的 `base_snr_db` 和更高的 `per_u_slot_prb_cap`。
-- 边缘用户具有更低的 `base_snr_db` 和更低的 `per_u_slot_prb_cap`。
-- `per_u_slot_prb_cap` 第一阶段作为固定参数，用于稳定表达边缘用户单 `U slot` 可获取资源上限。
+- 中心用户具有更高的 `base_snr_db`，且第一阶段不配置单独的 `PRB` 上限。
+- 边缘用户具有更低的 `base_snr_db`，并配置固定的 `edge_per_u_slot_prb_cap`。
+- `edge_per_u_slot_prb_cap` 第一阶段作为固定参数，用于稳定表达边缘用户单 `U slot` 可获取资源上限。
 
 ### 6.4 按 slot 更新的平稳 SNR 模型
 
@@ -352,7 +352,7 @@
 
 - 在 `D` 和 `S` 开始前，仿真器刷新当前 `slot` 的无线快照。
 - `ePF` 的瞬时速率项使用当前快照中的 `bits_per_prb`，历史平均速率继续基于实际发送结果统计。
-- `PRB` 顺序分配使用当前快照中的 `bits_per_prb` 与固定 `per_u_slot_prb_cap`。
+- `PRB` 顺序分配使用当前快照中的 `bits_per_prb`；若用户为边缘用户，再叠加固定的 `edge_per_u_slot_prb_cap` 约束。
 - 回插策略不直接读取 `SNR` 或 `MCS`，而是读取本次规划结果推导出的 `service_bits_per_decision`。
 
 这意味着：
@@ -425,7 +425,7 @@
 - `3` 个 `U slot` 可以看成一个总量为 `3N` 的资源窗口，其中每个 `U slot` 有 `N` 个 `PRB`。
 - `D` 规划前半段资源窗口，`S` 规划后半段资源窗口。
 - 第一阶段按顺序分配 `PRB`，不考虑 `minBR/GBR/MBR/AMBR`。
-- 边缘用户存在单 `U slot` 的 `PRB` 上限 `per_u_slot_prb_cap`，该值可配置。
+- 边缘用户存在单 `U slot` 的 `PRB` 上限 `edge_per_u_slot_prb_cap`，该值可配置；中心用户不配置该专项上限。
 
 第一阶段不追求复杂无线调度细节，只追求能够稳定表达“边缘用户每次即使被调度，单 `slot` 也无法吃下过多资源”的核心现象。
 
@@ -450,7 +450,7 @@
 - 基于本次调度结果估算的消费速度。
 - 当前全局活跃链表长度。
 - `max_ue_per_slot`。
-- 边缘用户单 `U slot PRB` 上限。
+- 若该用户为边缘用户，则读取其单 `U slot PRB` 上限。
 
 ### 8.3 速度估算
 
@@ -460,7 +460,7 @@
 
 - 计算该用户在本次调度下每个 `U slot` 大致可消费多少比特。
 - 该速度作为其后续若再次被服务时的近似消费能力。
-- 边缘用户速度还受 `per_u_slot_prb_cap` 限制。
+- 若该用户为边缘用户，其速度还受 `edge_per_u_slot_prb_cap` 限制。
 
 ### 8.4 队尾可行性判断
 
@@ -650,9 +650,9 @@
   - 到达周期或突发模式
 
 - `radio`
-  - 中心用户 `bits_per_prb`
-  - 边缘用户 `bits_per_prb`
-  - 边缘用户 `per_u_slot_prb_cap`
+  - 中心用户基础 `SNR` / `MCS` 参数
+  - 边缘用户基础 `SNR` / `MCS` 参数
+  - 边缘用户 `edge_per_u_slot_prb_cap`
 
 - `scheduler`
   - `ranking = epf`
@@ -671,7 +671,7 @@
 - 在统一场景下运行基线和新算法。
 - 精确模拟 `DSUUU` 周期中的 `D/S/U/U/U` 时间推进。
 - 精确模拟边缘用户大包跨多个 `U slot` 发送。
-- 支持边缘用户单 `U slot PRB` 上限。
+- 支持仅对边缘用户生效的单 `U slot PRB` 上限。
 - 支持“当前周期新到数据，下周期再调度”的可见性规则。
 - 支持比较尾插与受约束前插的差异。
 - 输出总体指标和边缘用户专项指标。

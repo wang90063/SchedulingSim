@@ -45,3 +45,18 @@ class UserEquipment:
     average_throughput: float
     traffic_profile: "TrafficProfile | None" = None
     hol_ms: int = 0
+
+
+@dataclass
+class SchedulingGrant:
+    ue_id: str
+    slot_index: int
+    prb_count: int
+    bits_planned: int
+
+
+@dataclass
+class PhasePlan:
+    phase: str
+    slot_prb_budgets: list[int]
+    slot_grants: dict[int, list[SchedulingGrant]]

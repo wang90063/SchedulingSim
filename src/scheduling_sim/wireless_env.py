@@ -26,11 +26,12 @@ class StableWirelessEnv:
         self._mcs_table = sorted(config.mcs_table, key=lambda entry: entry.snr_db)
 
     def reset(self, users: list[UserEquipment]) -> None:
+        self._rng = random.Random(self._config.seed)
         for user in users:
-            base_snr_db = user.radio_profile.base_snr_db
+            base_snr_db = self._clamp_snr(user.radio_profile.base_snr_db, user)
             mcs_entry = self._resolve_mcs(base_snr_db)
             user.current_radio_state = CurrentRadioState(
-                snr_db=self._clamp_snr(base_snr_db, user),
+                snr_db=base_snr_db,
                 mcs_index=mcs_entry.mcs_index,
                 bits_per_prb=mcs_entry.bits_per_prb,
                 per_u_slot_prb_cap=self._resolve_prb_cap(user),

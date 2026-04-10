@@ -1,0 +1,78 @@
+<h2>第一版业务模型要抽象到哪一层？</h2>
+<p class="subtitle">看成“平台内部的核心对象长什么样”，不是界面层</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. 通用实验模型</div>
+        <div class="mockup-body">
+          <div class="mock-nav">User / Task / Edge Node / Result</div>
+          <div class="mock-content">
+            用户产生任务 → 调度器分配到边缘节点 → 输出时延/吞吐/成功率
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>偏平台化</h3>
+      <p>核心对象很通用，后面接不同业务和算法都方便，但第一版对你当前调度问题的贴合度会弱一些。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. 贴近当前调度研究</div>
+        <div class="mockup-body">
+          <div class="mock-nav">UE / LC / PDB / candidate_ue / Edge</div>
+          <div class="mock-content">
+            UE 与业务流进入候选队列 → 算法决定顺序 → 统计尾时延、抖动、公平性
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>偏研究验证</h3>
+      <p>第一版最贴近你现在的问题，能更快验证算法思路，但未来切到别的业务场景时需要再抽象一次。</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. 双层模型</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Core Model + Cellular Adapter</div>
+          <div class="mock-content">
+            底层统一实验对象，上层用蜂窝调度适配器表达 UE / LC / PDB 等细节
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>平台与研究兼顾</h3>
+      <p>平台骨架先稳定，当前调度问题也能表达。复杂度比 A/B 高一点，但更符合“模块化、低耦合”的目标。</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>我目前更推荐 C</h4>
+      <ul>
+        <li>实验管理层只依赖通用实验模型</li>
+        <li>环境仿真层只依赖标准接口</li>
+        <li>你的算法和基线算法都挂在适配层里</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>代价</h4>
+      <ul>
+        <li>第一版设计要多做一层接口</li>
+        <li>需要先定义清楚核心对象边界</li>
+      </ul>
+    </div>
+  </div>
+</div>

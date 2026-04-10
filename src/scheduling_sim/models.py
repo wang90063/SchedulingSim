@@ -21,6 +21,15 @@ class LogicalChannel:
     def head_packet(self) -> Packet | None:
         return self.packets[0] if self.packets else None
 
+    @property
+    def has_pending_data(self) -> bool:
+        return self.head_packet is not None
+
+    def pop_head_packet(self) -> Packet | None:
+        if not self.packets:
+            return None
+        return self.packets.pop(0)
+
 
 @dataclass(frozen=True)
 class RadioProfile:

@@ -17,6 +17,26 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("report.json", result.stdout)
 
+    def test_run_command_supports_baseline_override(self) -> None:
+        result = subprocess.run(
+            [
+                "python",
+                "-m",
+                "scheduling_sim.cli",
+                "run",
+                "configs/edge_compare.json",
+                "--reinsert-policy",
+                "tail_append",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("tail_append", result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

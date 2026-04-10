@@ -20,6 +20,12 @@ class ActiveQueue:
     def peek_head_k(self, k: int) -> list[UserEquipment]:
         return self._users[:k]
 
+    def contains(self, ue: UserEquipment) -> bool:
+        return ue in self._users
+
+    def ordered_users(self) -> list[UserEquipment]:
+        return list(self._users)
+
     def append_tail(self, ue: UserEquipment) -> None:
         self.deactivate(ue)
         self._users.append(ue)

@@ -1,0 +1,14 @@
+{
+  "simulation": { "cycles": 4, "slot_duration_ms": 1, "tdd_pattern": "DSUUU" },
+  "resources": { "total_prb_per_u_slot": 106, "max_ue_per_slot": 16 },
+  "traffic": {
+    "center": { "count": 60, "period_slots": 1, "packet_bits": 200, "pdb_ms": 30 },
+    "edge": { "count": 4, "burst_cycle_interval": 1, "packet_bits": 40000, "pdb_ms": 15 }
+  },
+  "radio": {
+    "center": { "bits_per_prb": 20, "per_u_slot_prb_cap": 106 },
+    "edge": { "bits_per_prb": 10, "per_u_slot_prb_cap": 18 }
+  },
+  "scheduler": { "ranking": "epf", "reinsert_policy": "constrained_insert" },
+  "report": { "output_dir": "outputs/edge_compare", "keep_slot_trace": false }
+}

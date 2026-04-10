@@ -9,7 +9,11 @@ class EpfRankingPolicy:
         head = ue.lc.head_packet
         if head is None:
             return 0.0
-        inst_rate = ue.radio_profile.bits_per_prb
+        inst_rate = (
+            ue.current_radio_state.bits_per_prb
+            if ue.current_radio_state is not None
+            else ue.radio_profile.bits_per_prb
+        )
         avg_rate = max(ue.average_throughput, 1.0)
         if ue.hol_ms >= head.pdb_ms:
             return 100.0

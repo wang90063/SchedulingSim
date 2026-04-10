@@ -28,6 +28,14 @@ class RadioProfile:
     per_u_slot_prb_cap: int
 
 
+@dataclass(frozen=True)
+class TrafficProfile:
+    packet_bits: int
+    pdb_ms: int
+    period_slots: int | None = None
+    burst_cycle_interval: int | None = None
+
+
 @dataclass
 class UserEquipment:
     ue_id: str

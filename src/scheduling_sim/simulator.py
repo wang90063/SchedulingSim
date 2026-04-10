@@ -60,3 +60,27 @@ class UlSimulator:
                 max_ue_per_slot=self.config.resources.max_ue_per_slot,
             )
         return plan
+
+    def run(self) -> dict[str, float]:
+        total_prb_available = (
+            self.config.simulation.cycles * 3 * self.config.resources.total_prb_per_u_slot
+        )
+        total_prb_used = 0
+        for _cycle_index in range(self.config.simulation.cycles):
+            self.seed_active_queue()
+            d_plan = self.finish_phase("D")
+            s_plan = self.finish_phase("S")
+            total_prb_used += sum(
+                grant.prb_count
+                for grants in d_plan.slot_grants.values()
+                for grant in grants
+            )
+            total_prb_used += sum(
+                grant.prb_count
+                for grants in s_plan.slot_grants.values()
+                for grant in grants
+            )
+        return self.metrics.build_summary(
+            total_prb_used=total_prb_used,
+            total_prb_available=total_prb_available,
+        )

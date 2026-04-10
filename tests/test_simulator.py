@@ -11,6 +11,8 @@ from scheduling_sim.config import (
     TrafficConfig,
     TrafficSection,
 )
+from scheduling_sim.metrics import MetricsCollector
+from scheduling_sim.reporting import write_report
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
@@ -34,11 +36,6 @@ class ScenarioFactoryTests(unittest.TestCase):
         users = ScenarioFactory(config).build_users()
         self.assertEqual(len(users), 3)
         self.assertEqual(sum(1 for user in users if user.is_edge_user), 1)
-
-
-if __name__ == "__main__":
-    unittest.main()
-
 
 class DummyMetrics:
     pass
@@ -89,3 +86,23 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator.finish_phase("D")
         s_candidates = [ue.ue_id for ue in simulator.collect_candidates("S")]
         self.assertNotEqual(d_candidates, s_candidates)
+
+
+class MetricsTests(unittest.TestCase):
+    def test_metrics_report_contains_pdb_and_throughput_keys(self) -> None:
+        collector = MetricsCollector()
+        collector.record_packet_completed(
+            packet_id="pkt-1",
+            completion_time=12,
+            arrival_time=0,
+            pdb_ms=15,
+            bits_sent=120,
+        )
+        summary = collector.build_summary(total_prb_used=12, total_prb_available=30)
+        self.assertIn("pdb_violation_rate", summary)
+        self.assertIn("throughput_bits", summary)
+        self.assertTrue(callable(write_report))
+
+
+if __name__ == "__main__":
+    unittest.main()

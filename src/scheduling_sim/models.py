@@ -33,8 +33,21 @@ class LogicalChannel:
 
 @dataclass(frozen=True)
 class RadioProfile:
+    user_class: str = "center"
+    base_snr_db: float = 0.0
+    snr_min_db: float = 0.0
+    snr_max_db: float = 0.0
+    edge_per_u_slot_prb_cap: int | None = None
+    bits_per_prb: int = 0
+    per_u_slot_prb_cap: int = 0
+
+
+@dataclass(frozen=True)
+class CurrentRadioState:
+    snr_db: float
+    mcs_index: int
     bits_per_prb: int
-    per_u_slot_prb_cap: int
+    per_u_slot_prb_cap: int | None
 
 
 @dataclass(frozen=True)
@@ -53,6 +66,7 @@ class UserEquipment:
     radio_profile: RadioProfile
     average_throughput: float
     traffic_profile: "TrafficProfile | None" = None
+    current_radio_state: CurrentRadioState | None = None
     hol_ms: int = 0
 
 

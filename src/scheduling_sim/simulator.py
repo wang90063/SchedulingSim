@@ -3,10 +3,11 @@ from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
 from scheduling_sim.ranking import EpfRankingPolicy
 from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy
+from scheduling_sim.wireless_env import McsEntryView, StableWirelessEnv, WirelessEnvConfigView
 
 
 class UlSimulator:
-    def __init__(self, config, users, metrics) -> None:
+    def __init__(self, config, users, metrics, wireless_env=None) -> None:
         self.config = config
         self.users = users
         self.metrics = metrics
@@ -18,6 +19,52 @@ class UlSimulator:
             if config.scheduler.reinsert_policy == "tail_append"
             else ConstrainedInsertPolicy()
         )
+        self._wireless_env_injected = wireless_env is not None
+        self.wireless_env = wireless_env or self._build_wireless_env()
+        reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
+        if self.wireless_env is not None and reset_users and hasattr(self.wireless_env, "reset"):
+            self.wireless_env.reset(reset_users)
+
+    def _build_wireless_env(self):
+        radio_section = getattr(self.config, "radio", None)
+        env_config = getattr(radio_section, "environment", None)
+        mcs_table = getattr(env_config, "mcs_table", None) if env_config is not None else None
+        if not mcs_table or not self._dynamic_radio_users():
+            return None
+        seed = getattr(self.config.simulation, "random_seed", 0)
+        return StableWirelessEnv(
+            WirelessEnvConfigView(
+                alpha=float(getattr(env_config, "alpha", 1.0)),
+                jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
+                mcs_table=[
+                    McsEntryView(
+                        snr_db=float(entry.snr_db),
+                        mcs_index=int(entry.mcs_index),
+                        bits_per_prb=int(entry.bits_per_prb),
+                    )
+                    for entry in mcs_table
+                ],
+                seed=seed,
+            )
+        )
+
+    def _dynamic_radio_users(self) -> list[UserEquipment]:
+        return [user for user in self.users if self._is_dynamic_radio_profile(user.radio_profile)]
+
+    @staticmethod
+    def _is_dynamic_radio_profile(radio_profile) -> bool:
+        if radio_profile is None:
+            return False
+        required_attrs = ("base_snr_db", "snr_min_db", "snr_max_db")
+        if not all(hasattr(radio_profile, attr) for attr in required_attrs):
+            return False
+        looks_legacy_fixed_rate = (
+            getattr(radio_profile, "bits_per_prb", None) is not None
+            and getattr(radio_profile, "base_snr_db", 0.0) == 0.0
+            and getattr(radio_profile, "snr_min_db", 0.0) == 0.0
+            and getattr(radio_profile, "snr_max_db", 0.0) == 0.0
+        )
+        return not looks_legacy_fixed_rate
 
     def seed_active_queue(self, cycle_index: int) -> None:
         for user in self.users:
@@ -43,7 +90,11 @@ class UlSimulator:
     def collect_candidates(self, phase: str):
         return self.queue.peek_head_k(self.config.resources.max_ue_per_slot)
 
-    def finish_phase(self, phase: str, now_ms: int = 0):
+    def finish_phase(self, phase: str, now_ms: int = 0, slot_index: int = 0):
+        if self.wireless_env is not None and phase in {"D", "S"}:
+            refresh_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
+            if refresh_users:
+                self.wireless_env.refresh_slot(refresh_users, slot_index=slot_index, slot_name=phase)
         candidates = self.collect_candidates(phase)
         ranked = self.ranking.rank(candidates)
         plan = self.planner.plan_phase(phase, ranked)
@@ -69,15 +120,21 @@ class UlSimulator:
         total_prb_available = self.config.simulation.cycles * 3 * self.config.resources.total_prb_per_u_slot
         total_prb_used = 0
         self._preload_initial_backlog()
+        slots_per_cycle = len(self.config.simulation.tdd_pattern)
         for cycle_index in range(self.config.simulation.cycles):
             self.seed_active_queue(cycle_index)
             cycle_start_ms = cycle_index * len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms
             self._refresh_hol(cycle_start_ms)
-            d_plan = self.finish_phase("D", now_ms=cycle_start_ms)
+            d_plan = self.finish_phase(
+                "D",
+                now_ms=cycle_start_ms,
+                slot_index=cycle_index * slots_per_cycle,
+            )
             self._refresh_hol(cycle_start_ms + self.config.simulation.slot_duration_ms)
             s_plan = self.finish_phase(
                 "S",
                 now_ms=cycle_start_ms + self.config.simulation.slot_duration_ms,
+                slot_index=cycle_index * slots_per_cycle + 1,
             )
             for u_slot_index in range(3):
                 total_prb_used += self._execute_u_slot(

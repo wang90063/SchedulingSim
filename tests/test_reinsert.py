@@ -2,7 +2,7 @@ import unittest
 
 from scheduling_sim.models import LogicalChannel, Packet, RadioProfile, TrafficProfile, UserEquipment
 from scheduling_sim.queue import ActiveQueue
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy
+from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy, TargetOnlyConstrainedInsertPolicy
 
 
 class ReinsertionPolicyTests(unittest.TestCase):
@@ -54,6 +54,43 @@ class ReinsertionPolicyTests(unittest.TestCase):
             max_ue_per_slot=2,
         )
         self.assertIn(users[0], queue.peek_head_k(2))
+
+    def test_constrained_insert_chooses_farthest_safe_position(self) -> None:
+        queue = ActiveQueue()
+        users = [self.make_ue(f"ue-{index}", remaining_bits=120) for index in range(5)]
+        users[0].lc.head_packet.pdb_ms = 12
+        for user in users:
+            queue.activate(user)
+        policy = ConstrainedInsertPolicy()
+        policy.apply(
+            queue,
+            users[0],
+            queue_wait_size=queue.size,
+            service_bits_per_decision=120,
+            now_ms=8,
+            current_phase="S",
+            max_ue_per_slot=2,
+        )
+        ordered = [user.ue_id for user in queue.ordered_users()]
+        self.assertEqual(ordered.index(users[0].ue_id), 3)
+
+    def test_target_only_constrained_insert_falls_back_to_tail_for_non_target_packets(self) -> None:
+        queue = ActiveQueue()
+        users = [self.make_ue(f"ue-{index}") for index in range(5)]
+        for user in users:
+            queue.activate(user)
+        policy = TargetOnlyConstrainedInsertPolicy()
+        policy.apply(
+            queue,
+            users[0],
+            queue_wait_size=queue.size,
+            service_bits_per_decision=40,
+            now_ms=12,
+            current_phase="S",
+            max_ue_per_slot=2,
+        )
+        ordered = [user.ue_id for user in queue.ordered_users()]
+        self.assertEqual(ordered[-1], users[0].ue_id)
 
 
 if __name__ == "__main__":

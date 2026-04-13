@@ -12,6 +12,7 @@ class TrafficConfig:
     pdb_ms: int
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
+    gbr_bps: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -34,12 +35,26 @@ class McsEntryConfig:
     mcs_index: int
     bits_per_prb: int
 
+    @property
+    def sinr_db(self) -> float:
+        return self.snr_db
+
 
 @dataclass(frozen=True)
 class WirelessEnvConfig:
-    alpha: float
-    jitter_std_db: float
-    mcs_table: list[McsEntryConfig]
+    alpha: float = 1.0
+    jitter_std_db: float = 0.0
+    scenario_type: str = "legacy"
+    cell_radius_m: float = 0.0
+    carrier_frequency_ghz: float = 0.0
+    noise_figure_db: float = 0.0
+    interference_margin_db: float = 0.0
+    shadow_std_db: float = 0.0
+    slow_fading_alpha: float = 1.0
+    slot_jitter_std_db: float = 0.0
+    center_distance_range_m: tuple[float, float] = (0.0, 0.0)
+    edge_distance_range_m: tuple[float, float] = (0.0, 0.0)
+    mcs_table: list[McsEntryConfig] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -82,7 +97,7 @@ class TrafficSection:
 @dataclass(frozen=True)
 class RadioSection:
     environment: WirelessEnvConfig = field(
-        default_factory=lambda: WirelessEnvConfig(alpha=1.0, jitter_std_db=0.0, mcs_table=[])
+        default_factory=WirelessEnvConfig
     )
     center: RadioClassConfig = field(
         default_factory=lambda: RadioClassConfig(base_snr_db=0.0, snr_min_db=0.0, snr_max_db=0.0)
@@ -136,21 +151,42 @@ def _load_radio_class_config(
         base_snr_db=0.0,
         snr_min_db=0.0,
         snr_max_db=0.0,
-        edge_per_u_slot_prb_cap=int(payload.get("per_u_slot_prb_cap", UNCAPPED_PRB_LIMIT)),  # type: ignore[arg-type]
+        edge_per_u_slot_prb_cap=(
+            int(payload["edge_per_u_slot_prb_cap"]) if "edge_per_u_slot_prb_cap" in payload else None
+        ),
         bits_per_prb=resolved_bits_per_prb,
     )
 
 
 def _load_wireless_env_config(payload: dict[str, object]) -> WirelessEnvConfig:
     if not payload:
-        return WirelessEnvConfig(alpha=1.0, jitter_std_db=0.0, mcs_table=[])
+        return WirelessEnvConfig()
     mcs_table = sorted(
-        (McsEntryConfig(**entry) for entry in payload["mcs_table"]),  # type: ignore[index]
+        (
+            McsEntryConfig(
+                snr_db=float(entry.get("sinr_db", entry.get("snr_db", 0.0))),  # type: ignore[union-attr]
+                mcs_index=int(entry["mcs_index"]),  # type: ignore[index]
+                bits_per_prb=int(entry["bits_per_prb"]),  # type: ignore[index]
+            )
+            for entry in payload.get("mcs_table", [])  # type: ignore[union-attr]
+        ),
         key=lambda entry: entry.snr_db,
     )
+    center_distance = payload.get("center_distance_range_m", (0.0, 0.0))
+    edge_distance = payload.get("edge_distance_range_m", (0.0, 0.0))
     return WirelessEnvConfig(
-        alpha=float(payload["alpha"]),
-        jitter_std_db=float(payload["jitter_std_db"]),
+        alpha=float(payload.get("alpha", payload.get("slow_fading_alpha", 1.0))),
+        jitter_std_db=float(payload.get("jitter_std_db", payload.get("slot_jitter_std_db", 0.0))),
+        scenario_type=str(payload.get("scenario_type", "legacy")),
+        cell_radius_m=float(payload.get("cell_radius_m", 0.0)),
+        carrier_frequency_ghz=float(payload.get("carrier_frequency_ghz", 0.0)),
+        noise_figure_db=float(payload.get("noise_figure_db", 0.0)),
+        interference_margin_db=float(payload.get("interference_margin_db", 0.0)),
+        shadow_std_db=float(payload.get("shadow_std_db", 0.0)),
+        slow_fading_alpha=float(payload.get("slow_fading_alpha", payload.get("alpha", 1.0))),
+        slot_jitter_std_db=float(payload.get("slot_jitter_std_db", payload.get("jitter_std_db", 0.0))),
+        center_distance_range_m=(float(center_distance[0]), float(center_distance[1])),  # type: ignore[index]
+        edge_distance_range_m=(float(edge_distance[0]), float(edge_distance[1])),  # type: ignore[index]
         mcs_table=mcs_table,
     )
 

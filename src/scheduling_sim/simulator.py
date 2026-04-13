@@ -2,7 +2,7 @@ from scheduling_sim.models import Packet, UserEquipment
 from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
 from scheduling_sim.ranking import EpfRankingPolicy
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy
+from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy, TargetOnlyConstrainedInsertPolicy
 from scheduling_sim.wireless_env import McsEntryView, StableWirelessEnv, WirelessEnvConfigView
 
 
@@ -14,11 +14,12 @@ class UlSimulator:
         self.queue = ActiveQueue()
         self.ranking = EpfRankingPolicy()
         self.planner = PhasePrbPlanner(config.resources.total_prb_per_u_slot)
-        self.reinsert = (
-            TailAppendPolicy()
-            if config.scheduler.reinsert_policy == "tail_append"
-            else ConstrainedInsertPolicy()
-        )
+        if config.scheduler.reinsert_policy == "tail_append":
+            self.reinsert = TailAppendPolicy()
+        elif config.scheduler.reinsert_policy == "target_only_constrained_insert":
+            self.reinsert = TargetOnlyConstrainedInsertPolicy()
+        else:
+            self.reinsert = ConstrainedInsertPolicy()
         self._wireless_env_injected = wireless_env is not None
         self.wireless_env = wireless_env or self._build_wireless_env()
         reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
@@ -36,6 +37,14 @@ class UlSimulator:
             WirelessEnvConfigView(
                 alpha=float(getattr(env_config, "alpha", 1.0)),
                 jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
+                scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
+                cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
+                carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+                noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
+                interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
+                shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
+                slow_fading_alpha=float(getattr(env_config, "slow_fading_alpha", getattr(env_config, "alpha", 1.0))),
+                slot_jitter_std_db=float(getattr(env_config, "slot_jitter_std_db", getattr(env_config, "jitter_std_db", 0.0))),
                 mcs_table=[
                     McsEntryView(
                         snr_db=float(entry.snr_db),
@@ -55,6 +64,8 @@ class UlSimulator:
     def _is_dynamic_radio_profile(radio_profile) -> bool:
         if radio_profile is None:
             return False
+        if getattr(radio_profile, "distance_to_bs_m", 0.0) > 0.0:
+            return True
         required_attrs = ("base_snr_db", "snr_min_db", "snr_max_db")
         if not all(hasattr(radio_profile, attr) for attr in required_attrs):
             return False
@@ -63,19 +74,27 @@ class UlSimulator:
             and getattr(radio_profile, "base_snr_db", 0.0) == 0.0
             and getattr(radio_profile, "snr_min_db", 0.0) == 0.0
             and getattr(radio_profile, "snr_max_db", 0.0) == 0.0
+            and getattr(radio_profile, "distance_to_bs_m", 0.0) == 0.0
         )
         return not looks_legacy_fixed_rate
 
     def seed_active_queue(self, cycle_index: int) -> None:
         for user in self.users:
-            if user.lc.head_packet is not None and user.lc.eligible_cycle <= cycle_index:
+            head_packet = user.lc.head_packet
+            head_eligible_cycle = (
+                head_packet.eligible_cycle
+                if head_packet is not None
+                else user.lc.eligible_cycle
+            )
+            user.lc.eligible_cycle = head_eligible_cycle
+            if head_packet is not None and head_eligible_cycle <= cycle_index:
                 self.queue.activate(user)
-            elif self.queue.contains(user) and (
-                user.lc.head_packet is None or user.lc.eligible_cycle > cycle_index
-            ):
+            elif self.queue.contains(user) and (head_packet is None or head_eligible_cycle > cycle_index):
                 self.queue.deactivate(user)
 
-    def inject_packet(self, user, packet_bits: int, cycle_index: int, slot_name: str) -> None:
+    def inject_packet(self, user, packet_bits: int, cycle_index: int, slot_name: str, is_target: bool = False) -> None:
+        eligible_cycle = cycle_index + 1 if slot_name.startswith("U") else cycle_index
+        head_before_arrival = user.lc.head_packet
         packet = Packet(
             packet_id=f"{user.ue_id}-{cycle_index}-{slot_name}",
             arrival_time=cycle_index * 5,
@@ -83,9 +102,15 @@ class UlSimulator:
             remaining_bits=packet_bits,
             pdb_ms=user.traffic_profile.pdb_ms,
             completion_time=None,
+            eligible_cycle=eligible_cycle,
+            is_target=is_target,
         )
         user.lc.packets.append(packet)
-        user.lc.eligible_cycle = cycle_index + 1 if slot_name.startswith("U") else cycle_index
+        user.lc.eligible_cycle = (
+            eligible_cycle
+            if head_before_arrival is None
+            else head_before_arrival.eligible_cycle
+        )
 
     def collect_candidates(self, phase: str):
         return self.queue.peek_head_k(self.config.resources.max_ue_per_slot)
@@ -125,12 +150,14 @@ class UlSimulator:
             self.seed_active_queue(cycle_index)
             cycle_start_ms = cycle_index * len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms
             self._refresh_hol(cycle_start_ms)
+            self._track_target_control_slot()
             d_plan = self.finish_phase(
                 "D",
                 now_ms=cycle_start_ms,
                 slot_index=cycle_index * slots_per_cycle,
             )
             self._refresh_hol(cycle_start_ms + self.config.simulation.slot_duration_ms)
+            self._track_target_control_slot()
             s_plan = self.finish_phase(
                 "S",
                 now_ms=cycle_start_ms + self.config.simulation.slot_duration_ms,
@@ -146,17 +173,37 @@ class UlSimulator:
                 )
                 self._inject_u_slot_arrivals(cycle_index, u_slot_index)
                 self.seed_active_queue(cycle_index + 1)
+        simulation_duration_ms = (
+            self.config.simulation.cycles
+            * len(self.config.simulation.tdd_pattern)
+            * self.config.simulation.slot_duration_ms
+        )
+        self._refresh_hol(simulation_duration_ms)
         return self.metrics.build_summary(
             total_prb_used=total_prb_used,
             total_prb_available=total_prb_available,
+            users=self.users,
+            simulation_duration_ms=simulation_duration_ms,
+            slot_duration_ms=self.config.simulation.slot_duration_ms,
+            tdd_pattern=self.config.simulation.tdd_pattern,
         )
 
     def _preload_initial_backlog(self) -> None:
+        target_edge_marked = False
         for user in self.users:
             profile = user.traffic_profile
             if profile is None:
                 continue
-            self.inject_packet(user, profile.packet_bits, cycle_index=0, slot_name="D")
+            is_target = user.is_edge_user and not target_edge_marked
+            self.inject_packet(
+                user,
+                profile.packet_bits,
+                cycle_index=0,
+                slot_name="D",
+                is_target=is_target,
+            )
+            if is_target:
+                target_edge_marked = True
 
     def _inject_u_slot_arrivals(self, cycle_index: int, u_slot_index: int) -> None:
         global_slot = cycle_index * 3 + u_slot_index
@@ -171,12 +218,8 @@ class UlSimulator:
                 self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
 
     def _execute_u_slot(self, cycle_index: int, slot_index: int, now_ms: int, d_plan, s_plan) -> int:
-        grant_bits_by_user: dict[str, int] = {}
-        prb_count_by_user: dict[str, int] = {}
-        for plan in (d_plan, s_plan):
-            for grant in plan.slot_grants.get(slot_index, []):
-                grant_bits_by_user[grant.ue_id] = grant_bits_by_user.get(grant.ue_id, 0) + grant.bits_planned
-                prb_count_by_user[grant.ue_id] = prb_count_by_user.get(grant.ue_id, 0) + grant.prb_count
+        grant_bits_by_user, prb_count_by_user = self._merge_u_slot_grants(slot_index, d_plan, s_plan)
+        self._track_target_u_slot_wait(grant_bits_by_user)
         for user in self.users:
             bits_budget = grant_bits_by_user.get(user.ue_id, 0)
             if bits_budget <= 0:
@@ -186,13 +229,77 @@ class UlSimulator:
         self.seed_active_queue(cycle_index)
         return sum(prb_count_by_user.values())
 
+    def _find_target_packet(self) -> tuple[UserEquipment | None, Packet | None]:
+        for user in self.users:
+            head_packet = user.lc.head_packet
+            if head_packet is not None and head_packet.is_target:
+                return user, head_packet
+        return None, None
+
+    def _track_target_control_slot(self) -> None:
+        _, packet = self._find_target_packet()
+        if packet is None:
+            return
+        packet.control_slot_count_while_pending += 1
+
+    def _track_target_u_slot_wait(self, grant_bits_by_user: dict[str, int]) -> None:
+        target_user, packet = self._find_target_packet()
+        if target_user is None or packet is None:
+            return
+        if grant_bits_by_user.get(target_user.ue_id, 0) > 0:
+            return
+        if packet.first_service_time is None:
+            packet.waiting_u_slot_count_before_first_service += 1
+            return
+        packet.waiting_u_slot_count_after_first_service += 1
+
+    def _merge_u_slot_grants(self, slot_index: int, d_plan, s_plan) -> tuple[dict[str, int], dict[str, int]]:
+        grant_bits_by_user: dict[str, int] = {}
+        prb_count_by_user: dict[str, int] = {}
+        for plan in (d_plan, s_plan):
+            for grant in plan.slot_grants.get(slot_index, []):
+                grant_bits_by_user[grant.ue_id] = grant_bits_by_user.get(grant.ue_id, 0) + grant.bits_planned
+                prb_count_by_user[grant.ue_id] = prb_count_by_user.get(grant.ue_id, 0) + grant.prb_count
+        for user in self.users:
+            total_prbs = prb_count_by_user.get(user.ue_id, 0)
+            if total_prbs <= 0 or not user.is_edge_user:
+                continue
+            current_state = user.current_radio_state
+            cap = (
+                current_state.per_u_slot_prb_cap
+                if current_state is not None
+                else user.radio_profile.per_u_slot_prb_cap
+            )
+            if cap is None or total_prbs <= cap:
+                continue
+            bits_per_prb = (
+                current_state.bits_per_prb
+                if current_state is not None
+                else user.radio_profile.bits_per_prb
+            )
+            prb_count_by_user[user.ue_id] = cap
+            grant_bits_by_user[user.ue_id] = cap * bits_per_prb
+        return grant_bits_by_user, prb_count_by_user
+
     def _consume_user_bits(self, user: UserEquipment, bits_budget: int, now_ms: int) -> None:
         remaining_budget = bits_budget
+        user_class = "edge" if user.is_edge_user else "center"
         while remaining_budget > 0 and user.lc.head_packet is not None:
             packet = user.lc.head_packet
             bits_sent = min(packet.remaining_bits, remaining_budget)
+            if bits_sent > 0:
+                if packet.first_service_time is None:
+                    packet.first_service_time = now_ms
+                packet.service_slot_count += 1
+                packet.served_bits += bits_sent
             packet.remaining_bits -= bits_sent
             remaining_budget -= bits_sent
+            if hasattr(self.metrics, "record_bits_served"):
+                self.metrics.record_bits_served(
+                    user_class=user_class,
+                    bits_sent=bits_sent,
+                    ue_id=user.ue_id,
+                )
             user.average_throughput = max(1.0, float(bits_sent))
             if packet.remaining_bits > 0:
                 break
@@ -205,6 +312,14 @@ class UlSimulator:
                     arrival_time=completed.arrival_time,
                     pdb_ms=completed.pdb_ms,
                     bits_sent=completed.size_bits,
+                    user_class=user_class,
+                    ue_id=user.ue_id,
+                    is_target=completed.is_target,
+                    first_service_time=completed.first_service_time,
+                    service_slot_count=completed.service_slot_count,
+                    control_slot_count_while_pending=completed.control_slot_count_while_pending,
+                    waiting_u_slot_count_before_first_service=completed.waiting_u_slot_count_before_first_service,
+                    waiting_u_slot_count_after_first_service=completed.waiting_u_slot_count_after_first_service,
                 )
         if user.lc.head_packet is None and self.queue.contains(user):
             self.queue.deactivate(user)

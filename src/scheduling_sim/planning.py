@@ -13,11 +13,18 @@ class PhasePrbPlanner:
             else [0, self.total_prb_per_u_slot - half, self.total_prb_per_u_slot]
         )
         slot_grants = {0: [], 1: [], 2: []}
+        remaining_bits_by_user = {
+            user.ue_id: user.lc.head_packet.remaining_bits if user.lc.head_packet is not None else 0
+            for user in ranked_users
+        }
         for slot_index, budget in enumerate(budgets):
             remaining = budget
             for user in ranked_users:
                 if remaining <= 0:
                     break
+                pending_bits = remaining_bits_by_user.get(user.ue_id, 0)
+                if pending_bits <= 0:
+                    continue
                 current_state = user.current_radio_state
                 per_u_slot_prb_cap = None
                 if user.is_edge_user:
@@ -34,6 +41,12 @@ class PhasePrbPlanner:
                     if current_state is not None
                     else user.radio_profile.bits_per_prb
                 )
+                if bits_per_prb <= 0:
+                    continue
+                needed_prbs = -(-pending_bits // bits_per_prb)
+                grant_prbs = min(grant_prbs, needed_prbs)
+                if grant_prbs <= 0:
+                    continue
                 slot_grants[slot_index].append(
                     SchedulingGrant(
                         ue_id=user.ue_id,
@@ -43,4 +56,5 @@ class PhasePrbPlanner:
                     )
                 )
                 remaining -= grant_prbs
+                remaining_bits_by_user[user.ue_id] = max(0, pending_bits - (grant_prbs * bits_per_prb))
         return PhasePlan(phase=phase, slot_prb_budgets=budgets, slot_grants=slot_grants)

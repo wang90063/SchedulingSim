@@ -16,7 +16,12 @@ def main() -> int:
     run_parser.add_argument("config_path")
     run_parser.add_argument(
         "--reinsert-policy",
-        choices=["tail_append", "constrained_insert"],
+        choices=[
+            "tail_append",
+            "constrained_insert",
+            "target_only_constrained_insert",
+            "business_aware_constrained_insert",
+        ],
     )
     args = parser.parse_args()
     config = load_config(Path(args.config_path))

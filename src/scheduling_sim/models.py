@@ -9,6 +9,14 @@ class Packet:
     remaining_bits: int
     pdb_ms: int
     completion_time: int | None
+    eligible_cycle: int = 0
+    is_target: bool = False
+    first_service_time: int | None = None
+    service_slot_count: int = 0
+    served_bits: int = 0
+    control_slot_count_while_pending: int = 0
+    waiting_u_slot_count_before_first_service: int = 0
+    waiting_u_slot_count_after_first_service: int = 0
 
 
 @dataclass
@@ -28,7 +36,10 @@ class LogicalChannel:
     def pop_head_packet(self) -> Packet | None:
         if not self.packets:
             return None
-        return self.packets.pop(0)
+        packet = self.packets.pop(0)
+        if self.head_packet is not None:
+            self.eligible_cycle = self.head_packet.eligible_cycle
+        return packet
 
 
 @dataclass(frozen=True)
@@ -37,6 +48,7 @@ class RadioProfile:
     base_snr_db: float = 0.0
     snr_min_db: float = 0.0
     snr_max_db: float = 0.0
+    distance_to_bs_m: float = 0.0
     edge_per_u_slot_prb_cap: int | None = None
     bits_per_prb: int = 0
     per_u_slot_prb_cap: int = 0
@@ -56,6 +68,7 @@ class TrafficProfile:
     pdb_ms: int
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
+    gbr_bps: float = 0.0
 
 
 @dataclass

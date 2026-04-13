@@ -1,9 +1,9 @@
 {
-  "simulation": { "cycles": 20, "slot_duration_ms": 1, "tdd_pattern": "DSUUU", "random_seed": 7 },
+  "simulation": { "cycles": 40, "slot_duration_ms": 1, "tdd_pattern": "DSUUU", "random_seed": 7 },
   "resources": { "total_prb_per_u_slot": 106, "max_ue_per_slot": 16 },
   "traffic": {
-    "center": { "count": 60, "period_slots": 1, "packet_bits": 160, "pdb_ms": 30, "gbr_bps": 20000 },
-    "edge": { "count": 4, "burst_cycle_interval": 2, "packet_bits": 40000, "pdb_ms": 15 }
+    "center": { "count": 63, "period_slots": 1, "packet_bits": 160, "pdb_ms": 30, "gbr_bps": 7000 },
+    "edge": { "count": 1, "packet_bits": 40000, "pdb_ms": 120 }
   },
   "radio": {
     "environment": {
@@ -16,7 +16,7 @@
       "slow_fading_alpha": 0.95,
       "slot_jitter_std_db": 0.5,
       "center_distance_range_m": [50, 150],
-      "edge_distance_range_m": [425, 500],
+      "edge_distance_range_m": [375, 475],
       "mcs_table": [
         { "sinr_db": -8.0, "mcs_index": 0, "bits_per_prb": 24 },
         { "sinr_db": -2.0, "mcs_index": 1, "bits_per_prb": 48 },
@@ -26,8 +26,8 @@
       ]
     },
     "center": {},
-    "edge": { "edge_per_u_slot_prb_cap": 18 }
+    "edge": { "edge_per_u_slot_prb_cap": 24 }
   },
-  "scheduler": { "ranking": "epf", "reinsert_policy": "constrained_insert" },
-  "report": { "output_dir": "outputs/edge_compare", "keep_slot_trace": false }
+  "scheduler": { "ranking": "epf", "reinsert_policy": "target_only_constrained_insert" },
+  "report": { "output_dir": "outputs/target_edge_compare", "keep_slot_trace": false }
 }

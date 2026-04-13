@@ -69,6 +69,32 @@ class PhasePrbPlannerTests(unittest.TestCase):
         plan = PhasePrbPlanner(total_prb_per_u_slot=10).plan_phase("D", [center])
         self.assertEqual(plan.slot_grants[0][0].bits_planned, 90)
 
+    def test_planner_limits_grants_to_remaining_packet_bits(self) -> None:
+        small_center = UserEquipment(
+            ue_id="center-small",
+            lc=LogicalChannel("center-small-lc", [Packet("small", 0, 160, 160, 30, None)], eligible_cycle=0),
+            is_edge_user=False,
+            radio_profile=RadioProfile(bits_per_prb=100, per_u_slot_prb_cap=0),
+            average_throughput=1.0,
+            traffic_profile=TrafficProfile(packet_bits=160, pdb_ms=30),
+            current_radio_state=CurrentRadioState(snr_db=0.0, mcs_index=0, bits_per_prb=100, per_u_slot_prb_cap=None),
+            hol_ms=5,
+        )
+        large_edge = UserEquipment(
+            ue_id="edge-large",
+            lc=LogicalChannel("edge-large-lc", [Packet("large", 0, 1000, 1000, 120, None)], eligible_cycle=0),
+            is_edge_user=True,
+            radio_profile=RadioProfile(bits_per_prb=100, per_u_slot_prb_cap=4),
+            average_throughput=1.0,
+            traffic_profile=TrafficProfile(packet_bits=1000, pdb_ms=120),
+            current_radio_state=CurrentRadioState(snr_db=0.0, mcs_index=0, bits_per_prb=100, per_u_slot_prb_cap=4),
+            hol_ms=5,
+        )
+        plan = PhasePrbPlanner(total_prb_per_u_slot=10).plan_phase("D", [small_center, large_edge])
+        slot0 = {grant.ue_id: grant.prb_count for grant in plan.slot_grants[0]}
+        self.assertEqual(slot0["center-small"], 2)
+        self.assertEqual(slot0["edge-large"], 4)
+
     def test_falls_back_to_radio_profile_cap_without_current_state(self) -> None:
         edge = UserEquipment(
             ue_id="edge-1",
@@ -82,6 +108,23 @@ class PhasePrbPlannerTests(unittest.TestCase):
         )
         plan = PhasePrbPlanner(total_prb_per_u_slot=10).plan_phase("D", [edge])
         self.assertEqual(plan.slot_grants[0][0].prb_count, 6)
+
+    def test_phase_planner_applies_edge_cap_per_phase_budget(self) -> None:
+        edge = UserEquipment(
+            ue_id="edge-cap",
+            lc=LogicalChannel("edge-cap-lc", [Packet("pkt", 0, 1000, 1000, 15, None)], eligible_cycle=0),
+            is_edge_user=True,
+            radio_profile=RadioProfile(bits_per_prb=10, per_u_slot_prb_cap=18),
+            average_throughput=1.0,
+            traffic_profile=TrafficProfile(packet_bits=1000, pdb_ms=15),
+            current_radio_state=CurrentRadioState(snr_db=0.0, mcs_index=0, bits_per_prb=10, per_u_slot_prb_cap=18),
+            hol_ms=5,
+        )
+        planner = PhasePrbPlanner(total_prb_per_u_slot=36)
+        d_plan = planner.plan_phase("D", [edge])
+        s_plan = planner.plan_phase("S", [edge])
+        self.assertEqual(d_plan.slot_grants[1][0].prb_count, 18)
+        self.assertEqual(s_plan.slot_grants[1][0].prb_count, 18)
 
     def test_scenario_factory_accepts_legacy_radio_config(self) -> None:
         config = AppConfig(
@@ -104,6 +147,7 @@ class PhasePrbPlannerTests(unittest.TestCase):
         self.assertEqual(center_user.radio_profile.bits_per_prb, 12)
         self.assertEqual(edge_user.radio_profile.per_u_slot_prb_cap, 4)
         self.assertEqual(edge_user.current_radio_state.per_u_slot_prb_cap, 4)
+        edge_user.lc.packets.append(Packet("edge-pkt", 0, 1000, 1000, 15, None))
         plan = PhasePrbPlanner(total_prb_per_u_slot=10).plan_phase("D", [edge_user])
         self.assertEqual(plan.slot_grants[0][0].prb_count, 4)
 

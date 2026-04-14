@@ -142,10 +142,16 @@ class UlSimulator:
         return plan
 
     def run(self) -> dict[str, float]:
-        total_prb_available = self.config.simulation.cycles * 3 * self.config.resources.total_prb_per_u_slot
+        total_prb_available = 0
         total_prb_used = 0
         self._preload_initial_backlog()
         slots_per_cycle = len(self.config.simulation.tdd_pattern)
+        simulation_duration_ms = (
+            self.config.simulation.cycles
+            * len(self.config.simulation.tdd_pattern)
+            * self.config.simulation.slot_duration_ms
+        )
+        should_stop = False
         for cycle_index in range(self.config.simulation.cycles):
             self.seed_active_queue(cycle_index)
             cycle_start_ms = cycle_index * len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms
@@ -164,20 +170,23 @@ class UlSimulator:
                 slot_index=cycle_index * slots_per_cycle + 1,
             )
             for u_slot_index in range(3):
+                now_ms = cycle_start_ms + (2 + u_slot_index) * self.config.simulation.slot_duration_ms
+                total_prb_available += self.config.resources.total_prb_per_u_slot
                 total_prb_used += self._execute_u_slot(
                     cycle_index=cycle_index,
                     slot_index=u_slot_index,
-                    now_ms=cycle_start_ms + (2 + u_slot_index) * self.config.simulation.slot_duration_ms,
+                    now_ms=now_ms,
                     d_plan=d_plan,
                     s_plan=s_plan,
                 )
                 self._inject_u_slot_arrivals(cycle_index, u_slot_index)
                 self.seed_active_queue(cycle_index + 1)
-        simulation_duration_ms = (
-            self.config.simulation.cycles
-            * len(self.config.simulation.tdd_pattern)
-            * self.config.simulation.slot_duration_ms
-        )
+                if self._should_stop_after_target_edge_finished():
+                    simulation_duration_ms = now_ms + self.config.simulation.slot_duration_ms
+                    should_stop = True
+                    break
+            if should_stop:
+                break
         self._refresh_hol(simulation_duration_ms)
         return self.metrics.build_summary(
             total_prb_used=total_prb_used,
@@ -187,6 +196,12 @@ class UlSimulator:
             slot_duration_ms=self.config.simulation.slot_duration_ms,
             tdd_pattern=self.config.simulation.tdd_pattern,
         )
+
+    def _should_stop_after_target_edge_finished(self) -> bool:
+        if not getattr(self.config.simulation, "stop_when_target_edge_finished", False):
+            return False
+        completed_packets = getattr(self.metrics, "completed_packets", [])
+        return any(bool(packet.get("is_target")) for packet in completed_packets)
 
     def _preload_initial_backlog(self) -> None:
         target_edge_marked = False

@@ -102,6 +102,35 @@ def _format_delta(baseline: dict[str, float | int | str | bool], ours: dict[str,
     return "both unfinished"
 
 
+def _format_metric_difference(
+    baseline: dict[str, float | int | str | bool],
+    ours: dict[str, float | int | str | bool],
+    field: str,
+) -> str:
+    delta_ms = float(baseline[field]) - float(ours[field])
+    return f"{delta_ms:+.0f} ms"
+
+
+def _format_completion_difference(
+    baseline: dict[str, float | int | str | bool],
+    ours: dict[str, float | int | str | bool],
+) -> str:
+    if bool(baseline["target_edge_finished"]) and bool(ours["target_edge_finished"]):
+        return _format_metric_difference(baseline, ours, "target_edge_completion_delay_ms")
+    if (not bool(baseline["target_edge_finished"])) and bool(ours["target_edge_finished"]):
+        return f"unfinished -> {float(ours['target_edge_completion_delay_ms']):.0f} ms"
+    if bool(baseline["target_edge_finished"]) and (not bool(ours["target_edge_finished"])):
+        return f"{float(baseline['target_edge_completion_delay_ms']):.0f} ms -> unfinished"
+    return "both unfinished"
+
+
+def _format_observed_lifecycle(row: dict[str, float | int | str | bool]) -> str:
+    return (
+        f"{float(row['target_edge_queue_wait_ms']):.0f} ms queue wait + "
+        f"{float(row['target_edge_service_time_ms']):.0f} ms service time"
+    )
+
+
 def _dimension_label(dimension: str) -> str:
     return {
         "edge_pdb_ms": "Edge PDB 扫描",
@@ -118,7 +147,31 @@ def _value_label(dimension: str, value: int) -> str:
     }[dimension]
 
 
-def _build_section(rows: list[dict[str, float | int | str | bool]], dimension: str) -> str:
+def _section_fixed_context(payload: dict[str, Any], dimension: str) -> list[str]:
+    traffic = payload["traffic"]
+    radio = payload["radio"]
+    fixed_lines = {
+        "edge_pdb_ms": [
+            f"- 固定 `edge_per_u_slot_prb_cap = {radio['edge']['edge_per_u_slot_prb_cap']}`",
+            f"- 固定 `center_user_count = {traffic['center']['count']}`",
+        ],
+        "edge_per_u_slot_prb_cap": [
+            f"- 固定 `edge_pdb_ms = {traffic['edge']['pdb_ms']}`",
+            f"- 固定 `center_user_count = {traffic['center']['count']}`",
+        ],
+        "center_user_count": [
+            f"- 固定 `edge_pdb_ms = {traffic['edge']['pdb_ms']}`",
+            f"- 固定 `edge_per_u_slot_prb_cap = {radio['edge']['edge_per_u_slot_prb_cap']}`",
+        ],
+    }
+    return fixed_lines[dimension]
+
+
+def _build_section(
+    payload: dict[str, Any],
+    rows: list[dict[str, float | int | str | bool]],
+    dimension: str,
+) -> str:
     section_rows = [row for row in rows if row["dimension"] == dimension]
     value_to_rows = {
         int(row["value"]): row
@@ -127,6 +180,8 @@ def _build_section(rows: list[dict[str, float | int | str | bool]], dimension: s
     }
     report_lines = [
         f"## {_dimension_label(dimension)}",
+        "",
+        *_section_fixed_context(payload, dimension),
         "",
         "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | 结论 |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
@@ -176,19 +231,130 @@ def _find_row(
 
 def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) -> str:
     representative_pairs = [
-        ("31 center users 代表场景", _find_row(rows, dimension="center_user_count", value=31, policy="tail_append"), _find_row(rows, dimension="center_user_count", value=31, policy="business_aware_constrained_insert")),
-        ("63 center users 默认场景", _find_row(rows, dimension="center_user_count", value=63, policy="tail_append"), _find_row(rows, dimension="center_user_count", value=63, policy="business_aware_constrained_insert")),
+        (
+            "31 center users 代表场景",
+            _find_row(rows, dimension="center_user_count", value=31, policy="tail_append"),
+            _find_row(rows, dimension="center_user_count", value=31, policy="business_aware_constrained_insert"),
+        ),
+        (
+            "63 center users 默认场景",
+            _find_row(rows, dimension="center_user_count", value=63, policy="tail_append"),
+            _find_row(rows, dimension="center_user_count", value=63, policy="business_aware_constrained_insert"),
+        ),
     ]
-    pdb_rows = [
-        _find_row(rows, dimension="edge_pdb_ms", value=value, policy="business_aware_constrained_insert")
+    pdb_pairs = [
+        (
+            value,
+            _find_row(rows, dimension="edge_pdb_ms", value=value, policy="tail_append"),
+            _find_row(rows, dimension="edge_pdb_ms", value=value, policy="business_aware_constrained_insert"),
+        )
         for value in (100, 150, 200)
     ]
+    pdb_ours_rows = [ours for _, _, ours in pdb_pairs]
     prb_cap_12 = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=12, policy="business_aware_constrained_insert")
     prb_cap_30 = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=30, policy="business_aware_constrained_insert")
-    prb_cap_48_tail = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=48, policy="tail_append")
     prb_cap_48_ours = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=48, policy="business_aware_constrained_insert")
     prb_cap_106_tail = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=106, policy="tail_append")
     prb_cap_106_ours = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=106, policy="business_aware_constrained_insert")
+
+    control_phase_values = [
+        float(baseline["target_edge_control_phase_wait_ms"])
+        for _, baseline, _ in representative_pairs
+    ] + [
+        float(ours["target_edge_control_phase_wait_ms"])
+        for _, _, ours in representative_pairs
+    ]
+    pdb_gap_values = [float(row["target_edge_inter_service_gap_wait_ms"]) for row in pdb_ours_rows]
+    pdb_service_values = [float(row["target_edge_service_time_ms"]) for row in pdb_ours_rows]
+    pdb_gap_difference = _format_metric_difference(
+        pdb_pairs[0][1],
+        pdb_pairs[0][2],
+        "target_edge_inter_service_gap_wait_ms",
+    )
+    pdb_service_difference = _format_metric_difference(
+        pdb_pairs[0][1],
+        pdb_pairs[0][2],
+        "target_edge_service_time_ms",
+    )
+
+    if len(set(control_phase_values)) == 1:
+        control_phase_bullet = (
+            "- `Control Phase Wait` 的趋势：在 `31` 和 `63` 两个代表负载点里，"
+            f"基线和我们的 `Control Phase Wait` 都保持在 `{control_phase_values[0]:.0f} ms`。"
+            "这说明当前差异主要不在控制时隙本身，而在 `U` slot 内两次服务之间的空等有没有被压缩。"
+        )
+    else:
+        control_phase_bullet = (
+            "- `Control Phase Wait` 的趋势：它本质上和“目标包存活了多少个 `DSUUU` 周期”近似成正比。"
+            f"例如用户数从 `31` 增到 `63` 时，基线从 "
+            f"`{float(representative_pairs[0][1]['target_edge_control_phase_wait_ms']):.0f} ms` 升到 "
+            f"`{float(representative_pairs[1][1]['target_edge_control_phase_wait_ms']):.0f} ms`；"
+            f"我们的策略只从 `{float(representative_pairs[0][2]['target_edge_control_phase_wait_ms']):.0f} ms` "
+            f"升到 `{float(representative_pairs[1][2]['target_edge_control_phase_wait_ms']):.0f} ms`。"
+            "原因不是控制时隙变长了，而是负载更高时，基线要跨更多轮 `D->S` 才能把大包发完。"
+        )
+
+    if len(set(pdb_gap_values)) == 1:
+        inter_service_gap_bullet = (
+            "- `Inter-Service Gap Wait` 的趋势：这是最核心的收益来源。"
+            f"在默认 `63` 用户场景里，基线是 "
+            f"`{float(representative_pairs[1][1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
+            f"我们的策略降到 `{float(representative_pairs[1][2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
+            f"而在 `PDB = 100/150/200 ms` 这三档里，我们的 `Inter-Service Gap Wait` 都是 "
+            f"`{pdb_gap_values[0]:.0f} ms`，相对基线都减少 `{pdb_gap_difference}`。"
+            "这说明更紧的 `PDB` 已经触发了同一档回插行为，收益稳定地体现在两次服务之间少空等很多轮。"
+        )
+    else:
+        inter_service_gap_bullet = (
+            "- `Inter-Service Gap Wait` 的趋势：这是最核心的收益来源。"
+            f"在默认 `63` 用户场景里，基线是 "
+            f"`{float(representative_pairs[1][1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
+            f"我们的策略降到 `{float(representative_pairs[1][2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
+            f"当 `PDB` 从 `200 ms` 收紧到 `100 ms` 时，这项又从 "
+            f"`{float(pdb_ours_rows[2]['target_edge_inter_service_gap_wait_ms']):.0f} ms` 降到 "
+            f"`{float(pdb_ours_rows[0]['target_edge_inter_service_gap_wait_ms']):.0f} ms`。"
+            "原因是 `PDB` 越紧，目标包越容易被提前回插到候选窗口附近，于是两次传输之间少空等很多轮。"
+        )
+
+    if len(set(pdb_service_values)) == 1:
+        service_time_pdb_bullets = [
+            (
+                "- `PDB = 100/150/200 ms` 这三档下，我们的 `Service Time` 都保持在 "
+                f"`{pdb_service_values[0]:.0f} ms`，相对基线都体现为 `{pdb_service_difference}`。"
+            ),
+            (
+                "- 这说明在当前这组负载下，更紧的 `PDB` 主要压缩的是等待时间，"
+                "而不是继续改变目标包实际占用的 `U` slot` 数。"
+            ),
+        ]
+        service_time_trend_bullet = (
+            "- `Service Time` 的趋势：它主要受两类因素影响。第一类是物理资源上限，"
+            f"例如边缘 `PRB cap` 从 `30` 降到 `12` 时，我们的 `Service Time` 从 "
+            f"`{float(prb_cap_30['target_edge_service_time_ms']):.0f} ms` 增到 "
+            f"`{float(prb_cap_12['target_edge_service_time_ms']):.0f} ms`，"
+            "因为同样目标大包只能拆到更多 `U` slot 去传。第二类是调度轨迹本身，"
+            f"但在当前 `PDB = 100/150/200 ms` 这三档里，`Service Time` 都保持在 "
+            f"`{pdb_service_values[0]:.0f} ms`。"
+            "这说明此时主收益已经集中在 `Queue Wait` 的下降，而不是 `Service Time` 的进一步变化。"
+        )
+    else:
+        service_time_pdb_bullets = [
+            "- `PDB` 越紧，目标包越容易被提前回插，所以 `Inter-Service Gap Wait` 会明显下降",
+            "- `Service Time` 不是固定值，因为目标包被切分到的 `U` slot` 组合变了：更激进的回插会让它更连续地落在可服务窗口里",
+        ]
+        service_time_trend_bullet = (
+            "- `Service Time` 的趋势：它主要受两类因素影响。第一类是物理资源上限，"
+            f"例如边缘 `PRB cap` 从 `30` 降到 `12` 时，我们的 `Service Time` 从 "
+            f"`{float(prb_cap_30['target_edge_service_time_ms']):.0f} ms` 增到 "
+            f"`{float(prb_cap_12['target_edge_service_time_ms']):.0f} ms`，"
+            "因为同样目标大包只能拆到更多 `U` slot 去传。第二类是调度轨迹本身，"
+            f"例如 `PDB = 100/150/200 ms` 时，`Service Time` 分别是 "
+            f"`{float(pdb_ours_rows[0]['target_edge_service_time_ms']):.0f}/"
+            f"{float(pdb_ours_rows[1]['target_edge_service_time_ms']):.0f}/"
+            f"{float(pdb_ours_rows[2]['target_edge_service_time_ms']):.0f} ms`。"
+            "这说明更激进的回插会改变目标包落入哪些 `U` slot、每次拿到多少 PRB，因此 `Service Time` 会有小幅波动，但它仍然是次级效应，主收益还是 `Queue Wait` 的下降。"
+        )
+
     report_lines = [
         "## Queue Wait Breakdown",
         "",
@@ -196,6 +362,7 @@ def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) ->
         "- `Pre-First-Service Wait`：首次真正发 bit 之前，在 `U` slot 里没拿到资源的累计时间",
         "- `Inter-Service Gap Wait`：第一次被服务之后，到后续各次服务之间，在 `U` slot 里没拿到资源的累计时间",
         "- 这三项相加就是 `Queue Wait`；再加上 `Service Time`，就是目标边缘大包的生命周期时长",
+        "- `Difference` 列统一按 `Baseline - Ours` 计算：正数表示我们的等待更少，负数表示我们的时间更长",
         "",
         "### `Control Phase Wait` 和 `Inter-Service Gap Wait` 的区别与联系",
         "",
@@ -205,88 +372,84 @@ def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) ->
         "- 联系二：如果回插策略让目标包更快完成，通常会同时压低这两项；但主导机制不一样：`Control Phase Wait` 更受总完成周期数影响，`Inter-Service Gap Wait` 更直接反映回插是否减少了两次服务之间的空等",
         "- 在当前实验里，`Inter-Service Gap Wait` 往往更能体现我们算法的核心优势，因为它直接对应“传过一次之后，能不能很快再次被调度到”",
         "",
-        "### 代表负载点：等待是怎么拆开的",
+        "### 代表负载点：总体对比",
         "",
-        "| 场景 | 策略 | Completion | Queue Wait | Control Phase Wait | Pre-First-Service Wait | Inter-Service Gap Wait | Service Time |",
-        "| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        "| 场景 | Baseline Completion | Ours Completion | Completion Difference | Baseline Queue Wait | Ours Queue Wait | Queue Wait Difference | Baseline Service Time | Ours Service Time | Service Time Difference |",
+        "| --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
     for label, baseline, ours in representative_pairs:
-        for row in (baseline, ours):
-            report_lines.append(
-                "| "
-                f"{label} | `{row['policy']}` | "
-                f"`{float(row['target_edge_completion_delay_ms']):.0f} ms` | "
-                f"`{float(row['target_edge_queue_wait_ms']):.0f} ms` | "
-                f"`{float(row['target_edge_control_phase_wait_ms']):.0f} ms` | "
-                f"`{float(row['target_edge_pre_first_service_wait_ms']):.0f} ms` | "
-                f"`{float(row['target_edge_inter_service_gap_wait_ms']):.0f} ms` | "
-                f"`{float(row['target_edge_service_time_ms']):.0f} ms` |"
-            )
+        report_lines.append(
+            "| "
+            f"{label} | "
+            f"`{_format_completion(baseline)}` | "
+            f"`{_format_completion(ours)}` | "
+            f"`{_format_completion_difference(baseline, ours)}` | "
+            f"`{float(baseline['target_edge_queue_wait_ms']):.0f} ms` | "
+            f"`{float(ours['target_edge_queue_wait_ms']):.0f} ms` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_queue_wait_ms')}` | "
+            f"`{float(baseline['target_edge_service_time_ms']):.0f} ms` | "
+            f"`{float(ours['target_edge_service_time_ms']):.0f} ms` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_service_time_ms')}` |"
+        )
+    report_lines.extend(
+        [
+            "",
+            "### 代表负载点：Queue Wait 拆分差值",
+            "",
+            "| 场景 | Baseline Control Phase Wait | Ours Control Phase Wait | Control Phase Difference | Baseline Pre-First-Service Wait | Ours Pre-First-Service Wait | Pre-First-Service Difference | Baseline Inter-Service Gap Wait | Ours Inter-Service Gap Wait | Inter-Service Gap Difference |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for label, baseline, ours in representative_pairs:
+        report_lines.append(
+            "| "
+            f"{label} | "
+            f"`{float(baseline['target_edge_control_phase_wait_ms']):.0f} ms` | "
+            f"`{float(ours['target_edge_control_phase_wait_ms']):.0f} ms` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_control_phase_wait_ms')}` | "
+            f"`{float(baseline['target_edge_pre_first_service_wait_ms']):.0f} ms` | "
+            f"`{float(ours['target_edge_pre_first_service_wait_ms']):.0f} ms` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_pre_first_service_wait_ms')}` | "
+            f"`{float(baseline['target_edge_inter_service_gap_wait_ms']):.0f} ms` | "
+            f"`{float(ours['target_edge_inter_service_gap_wait_ms']):.0f} ms` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_inter_service_gap_wait_ms')}` |"
+        )
     report_lines.extend(
         [
             "",
             "### PDB 改变时，为什么 `service time` 也会变化",
             "",
-            "| Edge PDB | Completion | Queue Wait | Control Phase Wait | Pre-First-Service Wait | Inter-Service Gap Wait | Service Time |",
-            "| ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            "| Edge PDB | Completion Difference | Queue Wait Difference | Control Phase Difference | Pre-First-Service Difference | Inter-Service Gap Difference | Service Time Difference |",
+            "| ---: | --- | ---: | ---: | ---: | ---: | ---: |",
         ]
     )
-    for row in pdb_rows:
+    for value, baseline, ours in pdb_pairs:
         report_lines.append(
             "| "
-            f"`{int(row['value'])} ms` | "
-            f"`{float(row['target_edge_completion_delay_ms']):.0f} ms` | "
-            f"`{float(row['target_edge_queue_wait_ms']):.0f} ms` | "
-            f"`{float(row['target_edge_control_phase_wait_ms']):.0f} ms` | "
-            f"`{float(row['target_edge_pre_first_service_wait_ms']):.0f} ms` | "
-            f"`{float(row['target_edge_inter_service_gap_wait_ms']):.0f} ms` | "
-            f"`{float(row['target_edge_service_time_ms']):.0f} ms` |"
+            f"`{value} ms` | "
+            f"`{_format_completion_difference(baseline, ours)}` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_queue_wait_ms')}` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_control_phase_wait_ms')}` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_pre_first_service_wait_ms')}` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_inter_service_gap_wait_ms')}` | "
+            f"`{_format_metric_difference(baseline, ours, 'target_edge_service_time_ms')}` |"
         )
     report_lines.extend(
         [
             "",
-            "- `PDB` 越紧，目标包越容易被提前回插，所以 `Inter-Service Gap Wait` 会明显下降",
-            "- `Service Time` 不是固定值，因为目标包被切分到的 `U` slot` 组合变了：更激进的回插会让它更连续地落在可服务窗口里",
+            *service_time_pdb_bullets,
             "",
             "### 趋势分析",
             "",
-            (
-                "- `Control Phase Wait` 的趋势：它本质上和“目标包存活了多少个 `DSUUU` 周期”近似成正比。"
-                f"例如用户数从 `31` 增到 `63` 时，基线从 "
-                f"`{float(representative_pairs[0][1]['target_edge_control_phase_wait_ms']):.0f} ms` 升到 "
-                f"`{float(representative_pairs[1][1]['target_edge_control_phase_wait_ms']):.0f} ms`；"
-                f"我们的策略只从 `{float(representative_pairs[0][2]['target_edge_control_phase_wait_ms']):.0f} ms` "
-                f"升到 `{float(representative_pairs[1][2]['target_edge_control_phase_wait_ms']):.0f} ms`。"
-                "原因不是控制时隙变长了，而是负载更高时，基线要跨更多轮 `D->S` 才能把大包发完。"
-            ),
+            control_phase_bullet,
             (
                 "- `Pre-First-Service Wait` 的趋势：这项通常比较小，也比较稳定。"
                 f"在默认 `63` 用户场景里，`PDB = 100/150/200 ms` 时都保持在 "
-                f"`{float(pdb_rows[0]['target_edge_pre_first_service_wait_ms']):.0f} ms` 左右。"
+                f"`{float(pdb_ours_rows[0]['target_edge_pre_first_service_wait_ms']):.0f} ms` 左右。"
                 "这说明当前算法主要改进的是“第一次发完之后的回插位置”，而不是第一次被调度上的时刻；首次服务更多由初始入队位置和第一轮 `D/S` 决策决定。"
             ),
-            (
-                "- `Inter-Service Gap Wait` 的趋势：这是最核心的收益来源。"
-                f"在默认 `63` 用户场景里，基线是 "
-                f"`{float(representative_pairs[1][1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
-                f"我们的策略降到 `{float(representative_pairs[1][2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
-                f"当 `PDB` 从 `200 ms` 收紧到 `100 ms` 时，这项又从 "
-                f"`{float(pdb_rows[2]['target_edge_inter_service_gap_wait_ms']):.0f} ms` 降到 "
-                f"`{float(pdb_rows[0]['target_edge_inter_service_gap_wait_ms']):.0f} ms`。"
-                "原因是 `PDB` 越紧，目标包越容易被提前回插到候选窗口附近，于是两次传输之间少空等很多轮。"
-            ),
-            (
-                "- `Service Time` 的趋势：它主要受两类因素影响。第一类是物理资源上限，"
-                f"例如边缘 `PRB cap` 从 `30` 降到 `12` 时，我们的 `Service Time` 从 "
-                f"`{float(prb_cap_30['target_edge_service_time_ms']):.0f} ms` 增到 "
-                f"`{float(prb_cap_12['target_edge_service_time_ms']):.0f} ms`，"
-                "因为同样 `40000 bit` 只能拆到更多 `U` slot 去传。第二类是调度轨迹本身，"
-                f"例如 `PDB = 100/150/200 ms` 时，`Service Time` 分别是 "
-                f"`{float(pdb_rows[0]['target_edge_service_time_ms']):.0f}/"
-                f"{float(pdb_rows[1]['target_edge_service_time_ms']):.0f}/"
-                f"{float(pdb_rows[2]['target_edge_service_time_ms']):.0f} ms`。"
-                "这说明更激进的回插会改变目标包落入哪些 `U` slot、每次拿到多少 PRB，因此 `Service Time` 会有小幅波动，但它仍然是次级效应，主收益还是 `Queue Wait` 的下降。"
-            ),
+            inter_service_gap_bullet,
+            service_time_trend_bullet,
             (
                 "- 高 `PRB cap` 区间的趋势：当 `PRB cap` 提到 `48` 以后，两种策略在这个单包场景里会逐渐收敛。"
                 f"例如 `48` 时两者都约为 `{float(prb_cap_48_ours['target_edge_completion_delay_ms']):.0f} ms`，"
@@ -304,7 +467,7 @@ def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) ->
             "### 为什么 `Service Time` 往往是我们略高一点",
             "",
             "- 第一，不是因为我们的无线条件更差，而是因为当前 `Service Time` 的定义是“目标包实际占用了多少个 `U` slot`”。只要最后多拆到一个额外的 `U` slot 才发完，`Service Time` 就会多 `1 ms`。",
-            "- 第二，我们的策略目标是尽早重新回到候选窗口，而不是等到一次性拿大块 PRB 再传。所以常见现象是：更早开始、传得更连续，但每次拿到的是更细碎的一小段资源，于是同一个 `40000 bit` 大包会被切到更多 `U` slot 里完成。",
+            "- 第二，我们的策略目标是尽早重新回到候选窗口，而不是等到一次性拿大块 PRB 再传。所以常见现象是：更早开始、传得更连续，但每次拿到的是更细碎的一小段资源，于是同一个目标大包会被切到更多 `U` slot 里完成。",
             "- 第三，边缘用户还有 `PRB cap`。在这种上限存在时，“更频繁地被调度到”并不等于“每次都能拿很大一块 PRB”；很多时候只是把原本长时间空等，换成了多几个较短的服务片段。",
             "- 第四，基线 `tail_append` 虽然等待更久，但一旦重新回到候选窗口，有时会在某几个 `U` slot 里拿到更集中的资源，于是 `Service Time` 反而略短；不过它为此付出的代价，是更长的 `Inter-Service Gap Wait` 和更高的总完成时延。",
             "- 所以你现在看到的现象可以概括成一句话：**我们的算法通常把“大块空等 + 较少服务片段”，变成了“较少空等 + 稍多服务片段”**。从业务目标上看，这是一笔划算的交换，因为主收益来自总时延下降，而不是追求最小的 `Service Time`。",
@@ -321,17 +484,61 @@ def _build_prb_band_summary(rows: list[dict[str, float | int | str | bool]]) -> 
     high_cap_equal = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=48, policy="business_aware_constrained_insert")
     extreme_cap_equal = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=106, policy="business_aware_constrained_insert")
     extreme_cap_tail = _find_row(rows, dimension="edge_per_u_slot_prb_cap", value=106, policy="tail_append")
+    ultra_cap_equal = next(
+        (
+            row
+            for row in rows
+            if row["dimension"] == "edge_per_u_slot_prb_cap"
+            and int(row["value"]) == 237
+            and row["policy"] == "business_aware_constrained_insert"
+        ),
+        None,
+    )
+    ultra_cap_tail = next(
+        (
+            row
+            for row in rows
+            if row["dimension"] == "edge_per_u_slot_prb_cap"
+            and int(row["value"]) == 237
+            and row["policy"] == "tail_append"
+        ),
+        None,
+    )
+    high_cap_throughput_line = (
+        "- **高 PRB cap 对中心吞吐的影响**：在 `48/60` 这种中高区间，中心平均吞吐未必立刻下降，"
+        "因为目标边缘包更快传完后，后半段仿真窗口又把资源释放给了中心用户。"
+        f"但当 `PRB cap = 106` 时，基线和我们的中心平均吞吐都在 "
+        f"`{float(extreme_cap_tail['center_avg_rate_bps']):.0f} / {float(extreme_cap_equal['center_avg_rate_bps']):.0f} bps` 左右。"
+    )
+    if ultra_cap_equal is not None and ultra_cap_tail is not None:
+        high_cap_throughput_line = (
+            high_cap_throughput_line
+            + f"当 `PRB cap = 237` 时，两种策略都降到 "
+            f"`{float(ultra_cap_tail['center_avg_rate_bps']):.0f} / {float(ultra_cap_equal['center_avg_rate_bps']):.0f} bps`，"
+            "这时边缘单个大包已经明显压缩了中心吞吐。"
+        )
+    else:
+        high_cap_throughput_line = (
+            high_cap_throughput_line
+            + "说明在单包场景下，只有当边缘几乎能吃满单个 `U` slot` 的物理上限时，中心吞吐才会出现更显著的受损。"
+        )
     return "\n".join(
         [
             "## PRB Cap 分段总结",
             "",
-            "- **算法敏感区（`12~36`）**：这一段最能体现回插算法价值。比如 `24` 时，基线 `180 ms`、我们 `120 ms`；`36` 时，基线 `129 ms`、我们 `115 ms`。这里物理资源还不算充裕，目标边缘包需要跨多轮调度完成，所以“能不能少空等几轮”对结果非常关键。",
+            "- **算法敏感区（`12~36`）**：这一段最能体现回插算法价值。比如 `24` 时，基线约为 "
+            f"`{_format_completion(low_cap_tail)}`、我们约为 "
+            f"`{_format_completion(low_cap_ours)}`；`36` 时，基线约为 "
+            f"`{_format_completion(mid_cap_tail)}`、我们约为 "
+            f"`{_format_completion(mid_cap_ours)}`。这里物理资源还不算充裕，目标边缘包需要跨多轮调度完成，所以“能不能少空等几轮”对结果非常关键。",
             "- **过渡区（`48~60`）**：这一段开始由资源上限主导。`48` 时两种策略都在约 "
-            f"`{float(high_cap_equal['target_edge_completion_delay_ms']):.0f} ms` 完成，`60` 时都在约 `80 ms` 完成。说明一旦 `PRB cap` 足够高，单个边缘大包不需要很多轮回插就能发完，算法空间被物理资源压缩了。",
-            "- **资源主导区（`84~106`）**：这一段更像在看“高 PRB cap 会不会集中吃资源”。`106` 时，基线和我们的目标包都在约 "
+            f"`{float(high_cap_equal['target_edge_completion_delay_ms']):.0f} ms` 完成，`60` 时都在约 `"
+            f"{float(_find_row(rows, dimension='edge_per_u_slot_prb_cap', value=60, policy='business_aware_constrained_insert')['target_edge_completion_delay_ms']):.0f} ms` 完成。说明一旦 `PRB cap` 足够高，单个边缘大包不需要很多轮回插就能发完，算法空间被物理资源压缩了。",
+            "- **资源主导区（`84+`）**：这一段更像在看“高 PRB cap 会不会集中吃资源”。`106` 时，基线和我们的目标包都在约 "
             f"`{float(extreme_cap_equal['target_edge_completion_delay_ms']):.0f} ms` 完成，但中心平均吞吐同时降到 "
-            f"`{float(extreme_cap_tail['center_avg_rate_bps']):.0f} / {float(extreme_cap_equal['center_avg_rate_bps']):.0f} bps`。这说明在单包场景里，只有当边缘几乎能吃满单个 `U` slot` 的物理上限时，中心吞吐才会出现更明显的代价。",
-            "- **怎么讲这张图**：如果你要突出算法本身，重点讲 `12~36`；如果你要说明“边缘强吃资源会不会伤中心”，重点讲 `84~106`；而 `48~60` 正好是两者之间的分界带。",
+            f"`{float(extreme_cap_tail['center_avg_rate_bps']):.0f} / {float(extreme_cap_equal['center_avg_rate_bps']):.0f} bps`。",
+            high_cap_throughput_line,
+            "- **怎么讲这张图**：如果你要突出算法本身，重点讲 `12~36`；如果你要说明“边缘强吃资源会不会伤中心”，重点讲 `84+`；而 `48~60` 正好是两者之间的分界带。",
             "- **一句话结论**：在当前单边缘大包场景下，`edge PRB cap` 扫描同时呈现出两种机制——低 cap 区看算法收益，高 cap 区看物理资源上限的系统代价。",
         ]
     )
@@ -343,6 +550,30 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
     traffic = payload["traffic"]
     radio = payload["radio"]
     env = radio["environment"]
+    slot_duration_ms = int(simulation["slot_duration_ms"])
+    tdd_pattern = str(simulation["tdd_pattern"])
+    simulation_cap_ms = int(simulation["cycles"]) * len(tdd_pattern) * slot_duration_ms
+    stop_when_target_edge_finished = bool(simulation.get("stop_when_target_edge_finished", False))
+    timing_line = (
+        f"- TDD：`{tdd_pattern}`，每 slot `{slot_duration_ms} ms`，"
+        f"目标包发完即停；最大 `{simulation['cycles']}` 个周期作为安全上限（`{simulation_cap_ms} ms`）"
+        if stop_when_target_edge_finished
+        else f"- TDD：`{tdd_pattern}`，每 slot `{slot_duration_ms} ms`，"
+        f"共 `{simulation['cycles']}` 个周期，窗口 `{simulation_cap_ms} ms`"
+    )
+    completion_line = (
+        "- `Completion Delay`：目标边缘大包从到达到完成的总时延；"
+        f"本实验启用目标包发完即停，若到 `{simulation_cap_ms} ms` 安全上限仍未完成才标为 `unfinished`"
+        if stop_when_target_edge_finished
+        else f"- `Completion Delay`：目标边缘大包从到达到完成的总时延；"
+        f"若在 `{simulation_cap_ms} ms` 窗口内未完成，则标为 `unfinished`"
+    )
+    center_rate_line = (
+        "- `Center Avg Rate`：中心背景用户在目标包完成前的实际运行时长上计算平均吞吐，作为“边缘收益是否明显挤压中心业务”的辅助口径"
+        if stop_when_target_edge_finished
+        else "- `Center Avg Rate`：中心背景用户在整个实验窗口上的平均吞吐，作为“边缘收益是否明显挤压中心业务”的辅助口径"
+    )
+    lifecycle_scope = "实际累计" if stop_when_target_edge_finished else "窗口内累计"
     baseline_31 = _find_row(rows, dimension="center_user_count", value=31, policy="tail_append")
     ours_31 = _find_row(rows, dimension="center_user_count", value=31, policy="business_aware_constrained_insert")
     return "\n".join(
@@ -351,9 +582,9 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             "",
             "## 场景设置",
             "",
-            f"- TDD：`{simulation['tdd_pattern']}`，每 slot `1 ms`，共 `{simulation['cycles']}` 个周期，窗口 `200 ms`",
-            f"- 调度资源：每个 U-slot `106 PRB`，每次 `D/S` 从链表前 `{resources['max_ue_per_slot']}` 个 UE 中做 EPF 排序和顺序分配",
-            "- 目标业务：`1` 个边缘目标 UE，固定 `40000 bit` 大包，上行传输",
+            timing_line,
+            f"- 调度资源：每个 U-slot `{resources['total_prb_per_u_slot']} PRB`，每次 `D/S` 从链表前 `{resources['max_ue_per_slot']}` 个 UE 中做 EPF 排序和顺序分配",
+            f"- 目标业务：`1` 个边缘目标 UE，固定 `{traffic['edge']['packet_bits']} bit` 大包，上行传输",
             f"- 背景业务：中心用户周期小包，默认 `{traffic['center']['count']}` 个中心用户，`{traffic['center']['packet_bits']} bit/slot`",
             f"- 业务感知口径：中心背景 `PDB = {traffic['center']['pdb_ms']} ms`，可视为“天然队尾”；边缘目标基线 `PDB = {traffic['edge']['pdb_ms']} ms`",
             f"- 无线环境：`UMa`，小区半径 `{env['cell_radius_m']} m`，中心距离 `{env['center_distance_range_m']}`，边缘距离 `{env['edge_distance_range_m']}`",
@@ -373,18 +604,18 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             "",
             "## 指标说明",
             "",
-            "- `Completion Delay`：目标边缘大包从到达到完成的总时延；若在 `200 ms` 窗口内未完成，则标为 `unfinished`",
+            completion_line,
             "- `Queue Wait`：目标包总时延中未真正传 bit 的累计时间，包含 `D/S` 控制时隙、未进候选窗口的时间、进入候选后但未拿到 PRB 的时间",
-            "- `Service Time`：目标包实际发生传输的 `U` slot` 数量 × `1 ms`；不是理论纯净传输时长，而是“这个包被切成多少个 U-slot 才发完”",
+            f"- `Service Time`：目标包实际发生传输的 `U` slot` 数量 × `{slot_duration_ms} ms`；不是理论纯净传输时长，而是“这个包被切成多少个 U-slot 才发完”",
             "- `PDB Met`：目标边缘大包是否满足给定 `PDB`",
-            "- `Center Avg Rate`：中心背景用户在整个实验窗口上的平均吞吐，作为“边缘收益是否明显挤压中心业务”的辅助口径",
+            center_rate_line,
             "- 详细原始字段如 `time_to_first_service`、`remaining_bits` 已写入 JSON/CSV，便于后续继续画图",
             "",
-            _build_section(rows, "edge_pdb_ms"),
+            _build_section(payload, rows, "edge_pdb_ms"),
             "",
-            _build_section(rows, "edge_per_u_slot_prb_cap"),
+            _build_section(payload, rows, "edge_per_u_slot_prb_cap"),
             "",
-            _build_section(rows, "center_user_count"),
+            _build_section(payload, rows, "center_user_count"),
             "",
             _build_prb_band_summary(rows),
             "",
@@ -394,12 +625,8 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             "",
             (
                 "- 先看 `32` 用户场景，也就是 `31 center users` 这一行："
-                f"基线 `{float(baseline_31['target_edge_completion_delay_ms']):.0f} ms = "
-                f"{float(baseline_31['target_edge_queue_wait_ms']):.0f} ms queue wait + "
-                f"{float(baseline_31['target_edge_service_time_ms']):.0f} ms service time`，"
-                f"我们的策略 `{float(ours_31['target_edge_completion_delay_ms']):.0f} ms = "
-                f"{float(ours_31['target_edge_queue_wait_ms']):.0f} ms queue wait + "
-                f"{float(ours_31['target_edge_service_time_ms']):.0f} ms service time`"
+                f"基线 `{_format_completion(baseline_31)}`，{lifecycle_scope} `{_format_observed_lifecycle(baseline_31)}`；"
+                f"我们的策略 `{_format_completion(ours_31)}`，{lifecycle_scope} `{_format_observed_lifecycle(ours_31)}`"
             ),
             (
                 "- 这说明当前收益的主体不是“无线链路突然变强”，而是目标边缘大包少空等了很多轮："
@@ -407,7 +634,7 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
                 f"降到 `{float(ours_31['target_edge_queue_wait_ms']):.0f} ms`"
             ),
             "- `service time` 在不同 `PDB` 下会变化，是因为 `PDB` 改变了回插激进程度，进而改变了目标包会落在哪些 `D/S` 决策里、被切分到多少个 `U` slot 才发完",
-            "- 因此 `completion delay = queue wait + service time`；其中 `queue wait` 是主收益来源，`service time` 是由不同调度轨迹带来的次级变化",
+            "- 当目标包完成时，`completion delay = queue wait + service time`；若安全上限结束时仍未完成，报告里展示的是已经发生的 `queue wait/service time` 拆分",
             "",
             "## 结论",
             "",

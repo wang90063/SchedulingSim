@@ -15,6 +15,7 @@ class ConfigLoaderTests(unittest.TestCase):
         config = load_config(config_path)
         self.assertEqual(config.simulation.tdd_pattern, "DSUUU")
         self.assertEqual(config.simulation.random_seed, 7)
+        self.assertFalse(config.simulation.stop_when_target_edge_finished)
         self.assertEqual(config.traffic.edge.count, 4)
         self.assertEqual(config.traffic.center.gbr_bps, 20000.0)
         self.assertEqual(config.radio.environment.mcs_table[-1].bits_per_prb, 120)
@@ -119,6 +120,57 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.radio.environment.edge_distance_range_m, (425.0, 500.0))
         self.assertEqual(config.radio.environment.mcs_table[-1].bits_per_prb, 48)
         self.assertEqual(config.radio.edge.edge_per_u_slot_prb_cap, 18)
+
+    def test_load_config_supports_external_mcs_table_with_spectral_efficiency(self) -> None:
+        payload = {
+            "simulation": {
+                "cycles": 1,
+                "slot_duration_ms": 1,
+                "tdd_pattern": "DSUUU",
+                "random_seed": 7,
+                "stop_when_target_edge_finished": True,
+            },
+            "resources": {"total_prb_per_u_slot": 237, "max_ue_per_slot": 16},
+            "traffic": {
+                "center": {"count": 1, "period_slots": 1, "packet_bits": 160, "pdb_ms": 30},
+                "edge": {"count": 1, "burst_cycle_interval": 1, "packet_bits": 400000, "pdb_ms": 500},
+            },
+            "radio": {
+                "environment": {
+                    "scenario_type": "uma",
+                    "carrier_frequency_ghz": 3.5,
+                    "mcs_table_path": "mcs/nr_ul_main.json",
+                },
+                "center": {"base_snr_db": 8.0, "snr_min_db": 0.0, "snr_max_db": 20.0},
+                "edge": {
+                    "base_snr_db": 1.0,
+                    "snr_min_db": -5.0,
+                    "snr_max_db": 10.0,
+                    "edge_per_u_slot_prb_cap": 30,
+                },
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "business_aware_constrained_insert"},
+            "report": {"output_dir": "outputs/test-main", "keep_slot_trace": False},
+        }
+        mcs_payload = [
+            {"sinr_db": -5.0, "mcs_index": 0, "spectral_efficiency": 1.0},
+            {"sinr_db": 0.0, "mcs_index": 1, "spectral_efficiency": 2.0},
+            {"sinr_db": 6.0, "mcs_index": 2, "spectral_efficiency": 3.0},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            (config_dir / "mcs").mkdir()
+            (config_dir / "mcs" / "nr_ul_main.json").write_text(json.dumps(mcs_payload), encoding="utf-8")
+            path = config_dir / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.resources.total_prb_per_u_slot, 237)
+        self.assertEqual(config.radio.environment.mcs_table[0].bits_per_prb, 180)
+        self.assertEqual(config.radio.environment.mcs_table[1].bits_per_prb, 360)
+        self.assertEqual(config.radio.environment.mcs_table[2].bits_per_prb, 540)
+        self.assertEqual(config.radio.center.bits_per_prb, 540)
+        self.assertEqual(config.radio.edge.bits_per_prb, 360)
+        self.assertTrue(config.simulation.stop_when_target_edge_finished)
 
 
 if __name__ == "__main__":

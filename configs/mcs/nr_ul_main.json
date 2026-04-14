@@ -1,0 +1,17 @@
+[
+  { "sinr_db": -7.0, "mcs_index": 1, "spectral_efficiency": 0.1523 },
+  { "sinr_db": -5.0, "mcs_index": 2, "spectral_efficiency": 0.2344 },
+  { "sinr_db": -2.0, "mcs_index": 3, "spectral_efficiency": 0.3770 },
+  { "sinr_db": 0.0, "mcs_index": 4, "spectral_efficiency": 0.6016 },
+  { "sinr_db": 2.0, "mcs_index": 5, "spectral_efficiency": 0.8770 },
+  { "sinr_db": 4.0, "mcs_index": 6, "spectral_efficiency": 1.1758 },
+  { "sinr_db": 6.0, "mcs_index": 7, "spectral_efficiency": 1.4766 },
+  { "sinr_db": 8.0, "mcs_index": 8, "spectral_efficiency": 1.9141 },
+  { "sinr_db": 10.0, "mcs_index": 9, "spectral_efficiency": 2.4063 },
+  { "sinr_db": 12.0, "mcs_index": 10, "spectral_efficiency": 2.7305 },
+  { "sinr_db": 14.0, "mcs_index": 11, "spectral_efficiency": 3.3223 },
+  { "sinr_db": 16.0, "mcs_index": 12, "spectral_efficiency": 3.9023 },
+  { "sinr_db": 18.0, "mcs_index": 13, "spectral_efficiency": 4.5234 },
+  { "sinr_db": 21.0, "mcs_index": 14, "spectral_efficiency": 5.1152 },
+  { "sinr_db": 23.0, "mcs_index": 15, "spectral_efficiency": 5.5547 }
+]

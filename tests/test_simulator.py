@@ -310,6 +310,33 @@ class SimulatorCycleTests(unittest.TestCase):
         summary = UlSimulator(config, users, MetricsCollector()).run()
         self.assertGreater(summary["served_bits"], summary["throughput_bits"])
 
+    def test_run_stops_after_target_edge_packet_finishes_when_configured(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=4,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                stop_when_target_edge_finished=True,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=1, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(count=1, burst_cycle_interval=10, packet_bits=10, pdb_ms=15),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        summary = UlSimulator(config, users, MetricsCollector()).run()
+        self.assertTrue(summary["target_edge_finished"])
+        self.assertEqual(summary["target_edge_completion_delay_ms"], 3.0)
+        self.assertEqual(summary["simulation_duration_ms"], 3.0)
+        self.assertLess(summary["simulation_duration_ms"], 20.0)
+
     def test_constructs_wireless_env_from_new_radio_schema_when_not_injected(self) -> None:
         config = AppConfig(
             simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU"),

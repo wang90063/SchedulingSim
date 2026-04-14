@@ -191,6 +191,7 @@ class MetricsCollector:
             "avg_delay_ms": statistics.mean(delays),
             "p95_delay_ms": self._percentile(delays, 0.95),
             "p99_delay_ms": self._percentile(delays, 0.99),
+            "simulation_duration_ms": float(simulation_duration_ms),
             "pdb_violation_rate": len(violations) / len(self.completed_packets) if self.completed_packets else 0.0,
             "throughput_bits": sum(item["bits_sent"] for item in self.completed_packets),
             "served_bits": self.served_bits_total,

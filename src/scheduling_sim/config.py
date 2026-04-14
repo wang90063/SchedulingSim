@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 UNCAPPED_PRB_LIMIT = 10**9
+PRB_BANDWIDTH_HZ = 180_000
 
 
 @dataclass(frozen=True)
@@ -27,6 +28,7 @@ class SimulationConfig:
     slot_duration_ms: int
     tdd_pattern: str
     random_seed: int = 0
+    stop_when_target_edge_finished: bool = False
 
 
 @dataclass(frozen=True)
@@ -134,6 +136,40 @@ def _resolve_bits_per_prb(
     return bits_per_prb
 
 
+def _resolve_mcs_entry_bits_per_prb(entry: dict[str, object], *, slot_duration_ms: int) -> int:
+    explicit_bits_per_prb = entry.get("bits_per_prb")
+    if explicit_bits_per_prb is not None:
+        return int(explicit_bits_per_prb)
+    spectral_efficiency = entry.get("spectral_efficiency")
+    if spectral_efficiency is None:
+        raise KeyError("mcs entry requires bits_per_prb or spectral_efficiency")
+    bits_per_prb = float(spectral_efficiency) * PRB_BANDWIDTH_HZ * (slot_duration_ms / 1000.0)
+    return int(round(bits_per_prb))
+
+
+def _load_mcs_table(
+    payload: dict[str, object],
+    *,
+    config_dir: Path,
+    slot_duration_ms: int,
+) -> list[McsEntryConfig]:
+    mcs_entries_payload = payload.get("mcs_table")
+    if mcs_entries_payload is None and payload.get("mcs_table_path") is not None:
+        table_path = config_dir / str(payload["mcs_table_path"])
+        mcs_entries_payload = json.loads(table_path.read_text(encoding="utf-8"))
+    return sorted(
+        (
+            McsEntryConfig(
+                snr_db=float(entry.get("sinr_db", entry.get("snr_db", 0.0))),  # type: ignore[union-attr]
+                mcs_index=int(entry["mcs_index"]),  # type: ignore[index]
+                bits_per_prb=_resolve_mcs_entry_bits_per_prb(entry, slot_duration_ms=slot_duration_ms),  # type: ignore[arg-type]
+            )
+            for entry in (mcs_entries_payload or [])
+        ),
+        key=lambda entry: entry.snr_db,
+    )
+
+
 def _load_radio_class_config(
     payload: dict[str, object],
     env_config: WirelessEnvConfig,
@@ -158,20 +194,15 @@ def _load_radio_class_config(
     )
 
 
-def _load_wireless_env_config(payload: dict[str, object]) -> WirelessEnvConfig:
+def _load_wireless_env_config(
+    payload: dict[str, object],
+    *,
+    config_dir: Path,
+    slot_duration_ms: int,
+) -> WirelessEnvConfig:
     if not payload:
         return WirelessEnvConfig()
-    mcs_table = sorted(
-        (
-            McsEntryConfig(
-                snr_db=float(entry.get("sinr_db", entry.get("snr_db", 0.0))),  # type: ignore[union-attr]
-                mcs_index=int(entry["mcs_index"]),  # type: ignore[index]
-                bits_per_prb=int(entry["bits_per_prb"]),  # type: ignore[index]
-            )
-            for entry in payload.get("mcs_table", [])  # type: ignore[union-attr]
-        ),
-        key=lambda entry: entry.snr_db,
-    )
+    mcs_table = _load_mcs_table(payload, config_dir=config_dir, slot_duration_ms=slot_duration_ms)
     center_distance = payload.get("center_distance_range_m", (0.0, 0.0))
     edge_distance = payload.get("edge_distance_range_m", (0.0, 0.0))
     return WirelessEnvConfig(
@@ -193,11 +224,16 @@ def _load_wireless_env_config(payload: dict[str, object]) -> WirelessEnvConfig:
 
 def load_config(path: Path) -> AppConfig:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    simulation_config = SimulationConfig(**payload["simulation"])
     radio_payload = payload["radio"]
     env_payload = radio_payload.get("environment", {})
-    wireless_env_config = _load_wireless_env_config(env_payload)
+    wireless_env_config = _load_wireless_env_config(
+        env_payload,
+        config_dir=path.parent,
+        slot_duration_ms=simulation_config.slot_duration_ms,
+    )
     return AppConfig(
-        simulation=SimulationConfig(**payload["simulation"]),
+        simulation=simulation_config,
         resources=ResourcesConfig(**payload["resources"]),
         traffic=TrafficSection(
             center=TrafficConfig(**payload["traffic"]["center"]),

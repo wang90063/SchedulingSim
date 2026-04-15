@@ -141,6 +141,28 @@ def _value_label(dimension: str, value: int) -> str:
     }[dimension]
 
 
+def _format_completion(row: Row) -> str:
+    if bool(row["target_edge_finished"]):
+        return f"{float(row['target_edge_completion_delay_ms']):.0f} ms"
+    return f"unfinished ({float(row['target_edge_remaining_bits']):.0f} bit remain)"
+
+
+def _format_delta(baseline: Row, ours: Row) -> str:
+    if bool(baseline["target_edge_finished"]) and bool(ours["target_edge_finished"]):
+        delta_ms = float(baseline["target_edge_completion_delay_ms"]) - float(
+            ours["target_edge_completion_delay_ms"]
+        )
+        ratio = 0.0
+        if float(baseline["target_edge_completion_delay_ms"]) > 0.0:
+            ratio = delta_ms / float(baseline["target_edge_completion_delay_ms"]) * 100.0
+        return f"{delta_ms:.0f} ms ({ratio:.1f}%)"
+    if (not bool(baseline["target_edge_finished"])) and bool(ours["target_edge_finished"]):
+        return "ours changes unfinished -> finished"
+    if bool(baseline["target_edge_finished"]) and (not bool(ours["target_edge_finished"])):
+        return "baseline better"
+    return "both unfinished"
+
+
 def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
     lines = [
         "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | 结论 |",
@@ -154,15 +176,11 @@ def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
             for row in rows
             if int(row["value"]) == value and row["policy"] == "business_aware_constrained_insert"
         )
-        delta_ms = float(baseline["target_edge_completion_delay_ms"]) - float(ours["target_edge_completion_delay_ms"])
-        ratio = 0.0 if float(baseline["target_edge_completion_delay_ms"]) == 0.0 else (
-            delta_ms / float(baseline["target_edge_completion_delay_ms"]) * 100.0
-        )
         lines.append(
             "| "
             f"`{_value_label(dimension, value)}` | "
-            f"`{float(baseline['target_edge_completion_delay_ms']):.0f} ms` | "
-            f"`{float(ours['target_edge_completion_delay_ms']):.0f} ms` | "
+            f"`{_format_completion(baseline)}` | "
+            f"`{_format_completion(ours)}` | "
             f"`{float(baseline['target_edge_queue_wait_ms']):.0f} ms` | "
             f"`{float(ours['target_edge_queue_wait_ms']):.0f} ms` | "
             f"`{float(baseline['target_edge_service_time_ms']):.0f} ms` | "
@@ -171,7 +189,7 @@ def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
             f"`{bool(ours['target_edge_pdb_met'])}` | "
             f"`{float(baseline['center_avg_rate_bps']):.0f} bps` | "
             f"`{float(ours['center_avg_rate_bps']):.0f} bps` | "
-            f"{delta_ms:.0f} ms ({ratio:.1f}%) |"
+            f"{_format_delta(baseline, ours)} |"
         )
     return lines
 

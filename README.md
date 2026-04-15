@@ -74,12 +74,26 @@ PYTHONPATH=src python scripts/run_target_edge_sensitivity_report.py configs/targ
 PYTHONPATH=src python scripts/run_target_edge_sensitivity_report.py configs/target_edge_sensitivity_report_center1600.json
 ```
 
+主实验 `400000 bit / PDB 500 ms` 版本：
+
+```bash
+PYTHONPATH=src python scripts/run_target_edge_sensitivity_report.py configs/target_edge_sensitivity_report_main_400k_pdb500.json
+```
+
+其中 `configs/target_edge_sensitivity_report_main_400k_pdb500.json` 里的 `simulation.deadline_guard_ms` 用来给受约束回插增加“预测完成安全裕量”：
+
+- 默认值是 `0`，表示仍按 `completion_ms <= deadline_ms` 的贴边口径判断
+- 当配置为正数时，安全判断会变成 `completion_ms <= deadline_ms - deadline_guard_ms`
+- 这个配置适合用在临界实验上，避免出现 `499/503` 这种擦着 `PDB` 边界的结果
+- 当前 `main_400k_pdb500` 实验默认使用 `deadline_guard_ms = 10`
+
 运行后会在 `outputs/` 下生成结果，典型路径包括：
 
 - `outputs/target_edge_pdb_sweep/pdb_sweep.json:1`
 - `outputs/target_edge_sensitivity/sensitivity_report.md:1`
 - `outputs/target_edge_sensitivity/sensitivity_rows.csv:1`
 - `outputs/target_edge_sensitivity_center1600/sensitivity_report.md:1`
+- `outputs/target_edge_sensitivity_main_400kbit_pdb500/sensitivity_report.md:1`
 
 ### 运行测试
 

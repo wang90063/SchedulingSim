@@ -15,6 +15,8 @@ class EpfRankingPolicy:
             else ue.radio_profile.bits_per_prb
         )
         avg_rate = max(ue.average_throughput, 1.0)
+        if head.pdb_ms is None:
+            return inst_rate / avg_rate
         if ue.hol_ms >= head.pdb_ms:
             return 100.0
         hol_factor = ue.hol_ms / max(1, head.pdb_ms - ue.hol_ms)

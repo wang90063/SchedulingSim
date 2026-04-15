@@ -7,7 +7,7 @@ class Packet:
     arrival_time: int
     size_bits: int
     remaining_bits: int
-    pdb_ms: int
+    pdb_ms: int | None
     completion_time: int | None
     eligible_cycle: int = 0
     is_target: bool = False
@@ -65,7 +65,7 @@ class CurrentRadioState:
 @dataclass(frozen=True)
 class TrafficProfile:
     packet_bits: int
-    pdb_ms: int
+    pdb_ms: int | None
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0

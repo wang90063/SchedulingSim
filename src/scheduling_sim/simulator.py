@@ -14,17 +14,19 @@ class UlSimulator:
         self.queue = ActiveQueue()
         self.ranking = EpfRankingPolicy()
         self.planner = PhasePrbPlanner(config.resources.total_prb_per_u_slot)
+        deadline_guard_ms = int(getattr(config.simulation, "deadline_guard_ms", 0))
         if config.scheduler.reinsert_policy == "tail_append":
             self.reinsert = TailAppendPolicy()
         elif config.scheduler.reinsert_policy == "target_only_constrained_insert":
-            self.reinsert = TargetOnlyConstrainedInsertPolicy()
+            self.reinsert = TargetOnlyConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         else:
-            self.reinsert = ConstrainedInsertPolicy()
+            self.reinsert = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         self._wireless_env_injected = wireless_env is not None
         self.wireless_env = wireless_env or self._build_wireless_env()
         reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
         if self.wireless_env is not None and reset_users and hasattr(self.wireless_env, "reset"):
             self.wireless_env.reset(reset_users)
+        self._cycle_served_bits_by_ue = {user.ue_id: 0 for user in self.users}
 
     def _build_wireless_env(self):
         radio_section = getattr(self.config, "radio", None)
@@ -123,7 +125,7 @@ class UlSimulator:
         candidates = self.collect_candidates(phase)
         ranked = self.ranking.rank(candidates)
         plan = self.planner.plan_phase(phase, ranked)
-        for user in ranked:
+        for user in candidates:
             service_bits = sum(
                 grant.bits_planned
                 for slot_grants in plan.slot_grants.values()
@@ -185,6 +187,7 @@ class UlSimulator:
                     simulation_duration_ms = now_ms + self.config.simulation.slot_duration_ms
                     should_stop = True
                     break
+            self._close_cycle_average_throughput()
             if should_stop:
                 break
         self._refresh_hol(simulation_duration_ms)
@@ -315,7 +318,8 @@ class UlSimulator:
                     bits_sent=bits_sent,
                     ue_id=user.ue_id,
                 )
-            user.average_throughput = max(1.0, float(bits_sent))
+            if bits_sent > 0:
+                self._record_cycle_service(user.ue_id, bits_sent)
             if packet.remaining_bits > 0:
                 break
             packet.completion_time = now_ms
@@ -338,6 +342,21 @@ class UlSimulator:
                 )
         if user.lc.head_packet is None and self.queue.contains(user):
             self.queue.deactivate(user)
+
+    def _record_cycle_service(self, ue_id: str, bits_sent: int) -> None:
+        self._cycle_served_bits_by_ue[ue_id] = self._cycle_served_bits_by_ue.get(ue_id, 0) + bits_sent
+
+    def _close_cycle_average_throughput(self) -> None:
+        cycle_duration_seconds = (
+            len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms / 1000.0
+        )
+        if cycle_duration_seconds <= 0:
+            return
+        beta = min(1.0, max(0.0, float(getattr(self.config.simulation, "avg_rate_ewma_beta", 0.9))))
+        for user in self.users:
+            cycle_rate_bps = self._cycle_served_bits_by_ue.get(user.ue_id, 0) / cycle_duration_seconds
+            user.average_throughput = (beta * user.average_throughput) + ((1.0 - beta) * cycle_rate_bps)
+            self._cycle_served_bits_by_ue[user.ue_id] = 0
 
     def _refresh_hol(self, now_ms: int) -> None:
         for user in self.users:

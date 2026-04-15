@@ -20,37 +20,44 @@ def _run_summary(config) -> dict[str, float]:
     return UlSimulator(config, users, MetricsCollector()).run()
 
 
-def _case_config(config, dimension: str, value: int, policy: str):
+def _case_config(
+    config,
+    dimension: str,
+    value: int,
+    policy: str,
+    *,
+    center_user_count_override: int | None = None,
+):
+    updated_config = replace(
+        config,
+        scheduler=replace(config.scheduler, reinsert_policy=policy),
+    )
+    if center_user_count_override is not None:
+        updated_config = replace(
+            updated_config,
+            traffic=replace(
+                updated_config.traffic,
+                center=replace(updated_config.traffic.center, count=center_user_count_override),
+            ),
+        )
     if dimension == "edge_pdb_ms":
         traffic = replace(
-            config.traffic,
-            edge=replace(config.traffic.edge, pdb_ms=value),
+            updated_config.traffic,
+            edge=replace(updated_config.traffic.edge, pdb_ms=value),
         )
-        return replace(
-            config,
-            traffic=traffic,
-            scheduler=replace(config.scheduler, reinsert_policy=policy),
-        )
+        return replace(updated_config, traffic=traffic)
     if dimension == "edge_per_u_slot_prb_cap":
         radio = replace(
-            config.radio,
-            edge=replace(config.radio.edge, edge_per_u_slot_prb_cap=value),
+            updated_config.radio,
+            edge=replace(updated_config.radio.edge, edge_per_u_slot_prb_cap=value),
         )
-        return replace(
-            config,
-            radio=radio,
-            scheduler=replace(config.scheduler, reinsert_policy=policy),
-        )
+        return replace(updated_config, radio=radio)
     if dimension == "center_user_count":
         traffic = replace(
-            config.traffic,
-            center=replace(config.traffic.center, count=value),
+            updated_config.traffic,
+            center=replace(updated_config.traffic.center, count=value),
         )
-        return replace(
-            config,
-            traffic=traffic,
-            scheduler=replace(config.scheduler, reinsert_policy=policy),
-        )
+        return replace(updated_config, traffic=traffic)
     raise ValueError(f"unsupported dimension: {dimension}")
 
 
@@ -77,9 +84,76 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[dict[str, float | 
                         "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
                         "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
                         "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                        "context": "default",
+                    }
+                )
+    for center_user_count in sweep_spec.get("fixed_center_user_count_for_other_scans", []):
+        fixed_center_value = int(center_user_count)
+        context = _fixed_center_context(fixed_center_value)
+        for dimension in ("edge_pdb_ms", "edge_per_u_slot_prb_cap"):
+            for value in sweep_spec.get(dimension, []):
+                for policy in policies:
+                    summary = _run_summary(
+                        _case_config(
+                            config,
+                            dimension=dimension,
+                            value=int(value),
+                            policy=policy,
+                            center_user_count_override=fixed_center_value,
+                        )
+                    )
+                    rows.append(
+                        {
+                            "dimension": dimension,
+                            "value": int(value),
+                            "policy": policy,
+                            "target_edge_finished": bool(summary["target_edge_finished"]),
+                            "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
+                            "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
+                            "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
+                            "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
+                            "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
+                            "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
+                            "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
+                            "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
+                            "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
+                            "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                            "context": context,
+                        }
+                    )
+    fine_center_values = sweep_spec.get("fine_center_user_count", [])
+    if fine_center_values:
+        for value in fine_center_values:
+            for policy in policies:
+                summary = _run_summary(_case_config(config, dimension="center_user_count", value=int(value), policy=policy))
+                rows.append(
+                    {
+                        "dimension": "center_user_count",
+                        "value": int(value),
+                        "policy": policy,
+                        "target_edge_finished": bool(summary["target_edge_finished"]),
+                        "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
+                        "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
+                        "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
+                        "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
+                        "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
+                        "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
+                        "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
+                        "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
+                        "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
+                        "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                        "context": _fine_center_context(),
                     }
                 )
     return rows
+
+
+def _fixed_center_context(center_user_count: int) -> str:
+    return f"fixed_center_user_count_{center_user_count}"
+
+
+def _fine_center_context() -> str:
+    return "fine_center_user_count"
 
 
 def _format_completion(row: dict[str, float | int | str | bool]) -> str:
@@ -167,21 +241,38 @@ def _section_fixed_context(payload: dict[str, Any], dimension: str) -> list[str]
     return fixed_lines[dimension]
 
 
+def _rows_for_dimension(
+    rows: list[dict[str, float | int | str | bool]],
+    *,
+    dimension: str,
+    context: str = "default",
+) -> list[dict[str, float | int | str | bool]]:
+    return [
+        row
+        for row in rows
+        if row["dimension"] == dimension and str(row.get("context", "default")) == context
+    ]
+
+
 def _build_section(
     payload: dict[str, Any],
     rows: list[dict[str, float | int | str | bool]],
     dimension: str,
+    *,
+    context: str = "default",
+    title: str | None = None,
+    fixed_context_lines: list[str] | None = None,
 ) -> str:
-    section_rows = [row for row in rows if row["dimension"] == dimension]
+    section_rows = _rows_for_dimension(rows, dimension=dimension, context=context)
     value_to_rows = {
         int(row["value"]): row
         for row in section_rows
         if row["policy"] == "tail_append"
     }
     report_lines = [
-        f"## {_dimension_label(dimension)}",
+        f"## {title or _dimension_label(dimension)}",
         "",
-        *_section_fixed_context(payload, dimension),
+        *(fixed_context_lines or _section_fixed_context(payload, dimension)),
         "",
         "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | 结论 |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
@@ -215,32 +306,136 @@ def _build_section(
     return "\n".join(report_lines)
 
 
+def _build_fixed_center_sweep_sections(
+    payload: dict[str, Any],
+    rows: list[dict[str, float | int | str | bool]],
+) -> list[str]:
+    radio = payload["radio"]
+    sections: list[str] = []
+    for center_user_count in payload.get("sweep", {}).get("fixed_center_user_count_for_other_scans", []):
+        fixed_center_value = int(center_user_count)
+        context = _fixed_center_context(fixed_center_value)
+        if not _rows_for_dimension(rows, dimension="edge_pdb_ms", context=context):
+            continue
+        sections.append(
+            _build_section(
+                payload,
+                rows,
+                "edge_pdb_ms",
+                context=context,
+                title=f"固定 1+{fixed_center_value} 用户场景：Edge PDB 扫描",
+                fixed_context_lines=[
+                    f"- 固定 `center_user_count = {fixed_center_value}`（即 `1+{fixed_center_value}={fixed_center_value + 1} UE`）",
+                    f"- 固定 `edge_per_u_slot_prb_cap = {radio['edge']['edge_per_u_slot_prb_cap']}`",
+                ],
+            )
+        )
+        sections.append(
+            _build_section(
+                payload,
+                rows,
+                "edge_per_u_slot_prb_cap",
+                context=context,
+                title=f"固定 1+{fixed_center_value} 用户场景：Edge PRB 上限扫描",
+                fixed_context_lines=[
+                    f"- 固定 `center_user_count = {fixed_center_value}`（即 `1+{fixed_center_value}={fixed_center_value + 1} UE`）",
+                    f"- 固定 `edge_pdb_ms = {payload['traffic']['edge']['pdb_ms']}`",
+                ],
+            )
+        )
+    return sections
+
+
+def _build_fine_center_sweep_section(
+    payload: dict[str, Any],
+    rows: list[dict[str, float | int | str | bool]],
+) -> str | None:
+    context = _fine_center_context()
+    section_rows = _rows_for_dimension(rows, dimension="center_user_count", context=context)
+    if not section_rows:
+        return None
+    values = sorted({int(row["value"]) for row in section_rows})
+    return _build_section(
+        payload,
+        rows,
+        "center_user_count",
+        context=context,
+        title=f"细粒度中心用户数扫描（1+{values[0]} 到 1+{values[-1]}）",
+        fixed_context_lines=[
+            f"- 固定 `edge_pdb_ms = {payload['traffic']['edge']['pdb_ms']}`",
+            f"- 固定 `edge_per_u_slot_prb_cap = {payload['radio']['edge']['edge_per_u_slot_prb_cap']}`",
+            f"- 聚焦临界带 `1+{values[0]}` 到 `1+{values[-1]}`（即 `{values[0] + 1}` 到 `{values[-1] + 1} UE`）",
+        ],
+    )
+
+
 def _find_row(
     rows: list[dict[str, float | int | str | bool]],
     *,
     dimension: str,
     value: int,
     policy: str,
+    context: str = "default",
 ) -> dict[str, float | int | str | bool]:
     return next(
         row
         for row in rows
-        if row["dimension"] == dimension and int(row["value"]) == value and row["policy"] == policy
+        if row["dimension"] == dimension
+        and int(row["value"]) == value
+        and row["policy"] == policy
+        and str(row.get("context", "default")) == context
+    )
+
+
+def _has_row(
+    rows: list[dict[str, float | int | str | bool]],
+    *,
+    dimension: str,
+    value: int,
+    context: str = "default",
+) -> bool:
+    return any(
+        row["dimension"] == dimension
+        and int(row["value"]) == value
+        and str(row.get("context", "default")) == context
+        for row in rows
+    )
+
+
+def _representative_center_values(rows: list[dict[str, float | int | str | bool]]) -> tuple[int, ...]:
+    preferred_values = (16, 31, 63)
+    return tuple(
+        value for value in preferred_values if _has_row(rows, dimension="center_user_count", value=value, context="default")
+    )
+
+
+def _center_case_label(center_user_count: int, suffix: str) -> str:
+    total_user_count = center_user_count + 1
+    return f"{center_user_count} center users（1+{center_user_count}={total_user_count} UE）{suffix}"
+
+
+def _build_center_pair(
+    rows: list[dict[str, float | int | str | bool]],
+    center_user_count: int,
+    suffix: str,
+) -> tuple[str, dict[str, float | int | str | bool], dict[str, float | int | str | bool]]:
+    return (
+        _center_case_label(center_user_count, suffix),
+        _find_row(rows, dimension="center_user_count", value=center_user_count, policy="tail_append"),
+        _find_row(
+            rows,
+            dimension="center_user_count",
+            value=center_user_count,
+            policy="business_aware_constrained_insert",
+        ),
     )
 
 
 def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) -> str:
+    suffix_by_center_count = {16: "低负载场景", 31: "代表场景", 63: "默认场景"}
     representative_pairs = [
-        (
-            "31 center users 代表场景",
-            _find_row(rows, dimension="center_user_count", value=31, policy="tail_append"),
-            _find_row(rows, dimension="center_user_count", value=31, policy="business_aware_constrained_insert"),
-        ),
-        (
-            "63 center users 默认场景",
-            _find_row(rows, dimension="center_user_count", value=63, policy="tail_append"),
-            _find_row(rows, dimension="center_user_count", value=63, policy="business_aware_constrained_insert"),
-        ),
+        _build_center_pair(rows, value, suffix_by_center_count[value])
+        for value in _representative_center_values(rows)
     ]
     pdb_pairs = [
         (
@@ -278,38 +473,49 @@ def _build_breakdown_section(rows: list[dict[str, float | int | str | bool]]) ->
     )
 
     if len(set(control_phase_values)) == 1:
+        representative_labels = "、".join(
+            f"`{int(baseline['value'])}`" for _, baseline, _ in representative_pairs
+        )
         control_phase_bullet = (
-            "- `Control Phase Wait` 的趋势：在 `31` 和 `63` 两个代表负载点里，"
+            f"- `Control Phase Wait` 的趋势：在 {representative_labels} 这些代表负载点里，"
             f"基线和我们的 `Control Phase Wait` 都保持在 `{control_phase_values[0]:.0f} ms`。"
             "这说明当前差异主要不在控制时隙本身，而在 `U` slot 内两次服务之间的空等有没有被压缩。"
         )
     else:
+        baseline_low = representative_pairs[0][1]
+        baseline_high = representative_pairs[-1][1]
+        ours_low = representative_pairs[0][2]
+        ours_high = representative_pairs[-1][2]
+        low_center_count = int(baseline_low["value"])
+        high_center_count = int(baseline_high["value"])
         control_phase_bullet = (
             "- `Control Phase Wait` 的趋势：它本质上和“目标包存活了多少个 `DSUUU` 周期”近似成正比。"
-            f"例如用户数从 `31` 增到 `63` 时，基线从 "
-            f"`{float(representative_pairs[0][1]['target_edge_control_phase_wait_ms']):.0f} ms` 升到 "
-            f"`{float(representative_pairs[1][1]['target_edge_control_phase_wait_ms']):.0f} ms`；"
-            f"我们的策略只从 `{float(representative_pairs[0][2]['target_edge_control_phase_wait_ms']):.0f} ms` "
-            f"升到 `{float(representative_pairs[1][2]['target_edge_control_phase_wait_ms']):.0f} ms`。"
+            f"例如中心用户数从 `{low_center_count}` 增到 `{high_center_count}` 时，基线从 "
+            f"`{float(baseline_low['target_edge_control_phase_wait_ms']):.0f} ms` 升到 "
+            f"`{float(baseline_high['target_edge_control_phase_wait_ms']):.0f} ms`；"
+            f"我们的策略只从 `{float(ours_low['target_edge_control_phase_wait_ms']):.0f} ms` "
+            f"升到 `{float(ours_high['target_edge_control_phase_wait_ms']):.0f} ms`。"
             "原因不是控制时隙变长了，而是负载更高时，基线要跨更多轮 `D->S` 才能把大包发完。"
         )
 
     if len(set(pdb_gap_values)) == 1:
+        default_pair = next((pair for pair in representative_pairs if int(pair[1]["value"]) == 63), representative_pairs[-1])
         inter_service_gap_bullet = (
             "- `Inter-Service Gap Wait` 的趋势：这是最核心的收益来源。"
-            f"在默认 `63` 用户场景里，基线是 "
-            f"`{float(representative_pairs[1][1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
-            f"我们的策略降到 `{float(representative_pairs[1][2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
+            f"在 `{int(default_pair[1]['value'])}` 个中心用户场景里，基线是 "
+            f"`{float(default_pair[1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
+            f"我们的策略降到 `{float(default_pair[2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
             f"而在 `PDB = 100/150/200 ms` 这三档里，我们的 `Inter-Service Gap Wait` 都是 "
             f"`{pdb_gap_values[0]:.0f} ms`，相对基线都减少 `{pdb_gap_difference}`。"
             "这说明更紧的 `PDB` 已经触发了同一档回插行为，收益稳定地体现在两次服务之间少空等很多轮。"
         )
     else:
+        default_pair = next((pair for pair in representative_pairs if int(pair[1]["value"]) == 63), representative_pairs[-1])
         inter_service_gap_bullet = (
             "- `Inter-Service Gap Wait` 的趋势：这是最核心的收益来源。"
-            f"在默认 `63` 用户场景里，基线是 "
-            f"`{float(representative_pairs[1][1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
-            f"我们的策略降到 `{float(representative_pairs[1][2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
+            f"在 `{int(default_pair[1]['value'])}` 个中心用户场景里，基线是 "
+            f"`{float(default_pair[1]['target_edge_inter_service_gap_wait_ms']):.0f} ms`，"
+            f"我们的策略降到 `{float(default_pair[2]['target_edge_inter_service_gap_wait_ms']):.0f} ms`；"
             f"当 `PDB` 从 `200 ms` 收紧到 `100 ms` 时，这项又从 "
             f"`{float(pdb_ours_rows[2]['target_edge_inter_service_gap_wait_ms']):.0f} ms` 降到 "
             f"`{float(pdb_ours_rows[0]['target_edge_inter_service_gap_wait_ms']):.0f} ms`。"
@@ -554,6 +760,17 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
     tdd_pattern = str(simulation["tdd_pattern"])
     simulation_cap_ms = int(simulation["cycles"]) * len(tdd_pattern) * slot_duration_ms
     stop_when_target_edge_finished = bool(simulation.get("stop_when_target_edge_finished", False))
+    deadline_guard_ms = int(simulation.get("deadline_guard_ms", 0))
+    guard_lines = (
+        [
+            f"- 回插安全裕量：`deadline_guard_ms = {deadline_guard_ms} ms`，"
+            f"预测完成时间需不晚于 `PDB - {deadline_guard_ms} ms`，避免贴边决策"
+        ]
+        if deadline_guard_ms > 0
+        else []
+    )
+    representative_center_value = 16 if _has_row(rows, dimension="center_user_count", value=16) else 31
+    representative_total_users = representative_center_value + 1
     timing_line = (
         f"- TDD：`{tdd_pattern}`，每 slot `{slot_duration_ms} ms`，"
         f"目标包发完即停；最大 `{simulation['cycles']}` 个周期作为安全上限（`{simulation_cap_ms} ms`）"
@@ -574,8 +791,20 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
         else "- `Center Avg Rate`：中心背景用户在整个实验窗口上的平均吞吐，作为“边缘收益是否明显挤压中心业务”的辅助口径"
     )
     lifecycle_scope = "实际累计" if stop_when_target_edge_finished else "窗口内累计"
-    baseline_31 = _find_row(rows, dimension="center_user_count", value=31, policy="tail_append")
-    ours_31 = _find_row(rows, dimension="center_user_count", value=31, policy="business_aware_constrained_insert")
+    baseline_representative = _find_row(
+        rows,
+        dimension="center_user_count",
+        value=representative_center_value,
+        policy="tail_append",
+    )
+    ours_representative = _find_row(
+        rows,
+        dimension="center_user_count",
+        value=representative_center_value,
+        policy="business_aware_constrained_insert",
+    )
+    fine_center_section = _build_fine_center_sweep_section(payload, rows)
+    fixed_center_sections = _build_fixed_center_sweep_sections(payload, rows)
     return "\n".join(
         [
             "# Target Edge 参数敏感性测试报告",
@@ -587,6 +816,7 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             f"- 目标业务：`1` 个边缘目标 UE，固定 `{traffic['edge']['packet_bits']} bit` 大包，上行传输",
             f"- 背景业务：中心用户周期小包，默认 `{traffic['center']['count']}` 个中心用户，`{traffic['center']['packet_bits']} bit/slot`",
             f"- 业务感知口径：中心背景 `PDB = {traffic['center']['pdb_ms']} ms`，可视为“天然队尾”；边缘目标基线 `PDB = {traffic['edge']['pdb_ms']} ms`",
+            *guard_lines,
             f"- 无线环境：`UMa`，小区半径 `{env['cell_radius_m']} m`，中心距离 `{env['center_distance_range_m']}`，边缘距离 `{env['edge_distance_range_m']}`",
             f"- 边缘 PRB 上限：默认 `edge_per_u_slot_prb_cap = {radio['edge']['edge_per_u_slot_prb_cap']}`，仅对边缘 UE 生效",
             "",
@@ -600,7 +830,7 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             "- 每个 `DSUUU` 周期里，`D` 先做一次调度决策，分配前半段 PRB；然后更新全局链表；`S` 再基于更新后的链表做第二次决策，分配后半段 PRB",
             "- 两次决策共同生成后面 `3` 个 `U` slot` 的传输计划；真正发 bit 的动作只发生在 `U` slot",
             f"- 因为每次 `D/S` 都只看链表前 `{resources['max_ue_per_slot']}` 个 UE，目标边缘大包即便刚被服务过，也不保证在同周期 `S` 或下周期 `D` 还能继续留在候选窗口",
-            "- 所以即使总用户数只有 `32`（即 `31` 个中心背景用户 + `1` 个边缘目标用户），大包也不会天然“连续不断地一直传”",
+            f"- 所以即使总用户数只有 `{representative_total_users}`（即 `{representative_center_value}` 个中心背景用户 + `1` 个边缘目标用户），大包也不会天然“连续不断地一直传”",
             "",
             "## 指标说明",
             "",
@@ -616,6 +846,16 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             _build_section(payload, rows, "edge_per_u_slot_prb_cap"),
             "",
             _build_section(payload, rows, "center_user_count"),
+            *(
+                ["", fine_center_section]
+                if fine_center_section is not None
+                else []
+            ),
+            *(
+                ["", *fixed_center_sections]
+                if fixed_center_sections
+                else []
+            ),
             "",
             _build_prb_band_summary(rows),
             "",
@@ -624,14 +864,14 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             "## 数字怎么理解",
             "",
             (
-                "- 先看 `32` 用户场景，也就是 `31 center users` 这一行："
-                f"基线 `{_format_completion(baseline_31)}`，{lifecycle_scope} `{_format_observed_lifecycle(baseline_31)}`；"
-                f"我们的策略 `{_format_completion(ours_31)}`，{lifecycle_scope} `{_format_observed_lifecycle(ours_31)}`"
+                f"- 先看 `{representative_total_users}` 用户场景，也就是 `1+{representative_center_value}` 这一行："
+                f"基线 `{_format_completion(baseline_representative)}`，{lifecycle_scope} `{_format_observed_lifecycle(baseline_representative)}`；"
+                f"我们的策略 `{_format_completion(ours_representative)}`，{lifecycle_scope} `{_format_observed_lifecycle(ours_representative)}`"
             ),
             (
                 "- 这说明当前收益的主体不是“无线链路突然变强”，而是目标边缘大包少空等了很多轮："
-                f"`queue wait` 从 `{float(baseline_31['target_edge_queue_wait_ms']):.0f} ms` "
-                f"降到 `{float(ours_31['target_edge_queue_wait_ms']):.0f} ms`"
+                f"`queue wait` 从 `{float(baseline_representative['target_edge_queue_wait_ms']):.0f} ms` "
+                f"降到 `{float(ours_representative['target_edge_queue_wait_ms']):.0f} ms`"
             ),
             "- `service time` 在不同 `PDB` 下会变化，是因为 `PDB` 改变了回插激进程度，进而改变了目标包会落在哪些 `D/S` 决策里、被切分到多少个 `U` slot 才发完",
             "- 当目标包完成时，`completion delay = queue wait + service time`；若安全上限结束时仍未完成，报告里展示的是已经发生的 `queue wait/service time` 拆分",

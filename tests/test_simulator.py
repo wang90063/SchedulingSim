@@ -146,6 +146,11 @@ class RecordingPlanner:
         return PhasePlan(phase=phase, slot_prb_budgets=[0, 0, 0], slot_grants={0: [], 1: [], 2: []})
 
 
+class ReverseRanking:
+    def rank(self, users):
+        return list(reversed(users))
+
+
 class SimulatorCycleTests(unittest.TestCase):
     def _legacy_config(self, center_count: int = 1, max_ue_per_slot: int = 2) -> AppConfig:
         return AppConfig(
@@ -189,17 +194,17 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator.seed_active_queue(1)
         self.assertTrue(simulator.queue.contains(center_user))
 
-    def test_d_then_s_use_fresh_head_k_after_reinsert(self) -> None:
+    def test_finish_phase_tail_append_preserves_candidate_relative_order(self) -> None:
         config = self._legacy_config(center_count=3, max_ue_per_slot=2)
         users = ScenarioFactory(config).build_users()
         simulator = UlSimulator(config, users, DummyMetrics())
         for user in users:
             simulator.inject_packet(user, packet_bits=50, cycle_index=0, slot_name="D")
             simulator.queue.activate(user)
-        d_candidates = [ue.ue_id for ue in simulator.collect_candidates("D")]
+        simulator.ranking = ReverseRanking()
         simulator.finish_phase("D")
-        s_candidates = [ue.ue_id for ue in simulator.collect_candidates("S")]
-        self.assertNotEqual(d_candidates, s_candidates)
+        after = [ue.ue_id for ue in simulator.queue.ordered_users()]
+        self.assertEqual(after, ["center-2", "center-0", "center-1"])
 
     def test_refreshes_wireless_snapshots_before_d_and_s_only(self) -> None:
         config = self._legacy_config(center_count=1, max_ue_per_slot=1)
@@ -309,6 +314,57 @@ class SimulatorCycleTests(unittest.TestCase):
         users = ScenarioFactory(config).build_users()
         summary = UlSimulator(config, users, MetricsCollector()).run()
         self.assertGreater(summary["served_bits"], summary["throughput_bits"])
+
+    def test_run_updates_average_throughput_from_cycle_rate(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=1,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                avg_rate_ewma_beta=0.5,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=1, period_slots=10, packet_bits=30, pdb_ms=None),
+                edge=TrafficConfig(count=0, burst_cycle_interval=1, packet_bits=0, pdb_ms=15),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/demo", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        simulator = UlSimulator(config, users, DummyMetrics())
+        simulator.run()
+        self.assertEqual(users[0].average_throughput, 6000.5)
+
+    def test_run_decays_average_throughput_when_cycle_has_no_service(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=1,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                avg_rate_ewma_beta=0.8,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=1, period_slots=10, packet_bits=0, pdb_ms=None),
+                edge=TrafficConfig(count=0, burst_cycle_interval=1, packet_bits=0, pdb_ms=15),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/demo", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        users[0].average_throughput = 10.0
+        simulator = UlSimulator(config, users, DummyMetrics())
+        simulator.run()
+        self.assertEqual(users[0].average_throughput, 8.0)
 
     def test_run_stops_after_target_edge_packet_finishes_when_configured(self) -> None:
         config = AppConfig(
@@ -586,6 +642,20 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["target_edge_inter_service_gap_wait_ms"], 0.0)
         self.assertEqual(summary["target_edge_time_to_first_service_ms"], 2.0)
         self.assertTrue(summary["target_edge_pdb_met"])
+
+    def test_metrics_ignore_packets_without_pdb_in_deadline_kpis(self) -> None:
+        collector = MetricsCollector()
+        collector.record_packet_completed(
+            packet_id="pkt-no-pdb",
+            completion_time=10,
+            arrival_time=0,
+            pdb_ms=None,
+            bits_sent=100,
+            user_class="edge",
+        )
+        summary = collector.build_summary(total_prb_used=1, total_prb_available=1, users=[])
+        self.assertEqual(summary["pdb_violation_rate"], 0.0)
+        self.assertEqual(summary["edge_pdb_satisfaction_rate"], 0.0)
 
 
 if __name__ == "__main__":

@@ -62,6 +62,56 @@ class EpfRankingTests(unittest.TestCase):
         ranked = ranking.rank([low_profile_rate, high_profile_rate])
         self.assertEqual([ue.ue_id for ue in ranked], ["ue-high-profile", "ue-low-profile"])
 
+    def test_no_pdb_user_uses_pure_epf_ratio(self) -> None:
+        ranking = EpfRankingPolicy()
+        no_pdb_fast = UserEquipment(
+            ue_id="ue-no-pdb-fast",
+            lc=LogicalChannel("lc-fast", [Packet("pkt-fast", 0, 300, 300, None, None)], eligible_cycle=0),
+            is_edge_user=False,
+            radio_profile=RadioProfile(bits_per_prb=12, per_u_slot_prb_cap=10),
+            average_throughput=3.0,
+            traffic_profile=TrafficProfile(packet_bits=300, pdb_ms=None),
+            current_radio_state=None,
+            hol_ms=29,
+        )
+        no_pdb_slow = UserEquipment(
+            ue_id="ue-no-pdb-slow",
+            lc=LogicalChannel("lc-slow", [Packet("pkt-slow", 0, 300, 300, None, None)], eligible_cycle=0),
+            is_edge_user=False,
+            radio_profile=RadioProfile(bits_per_prb=8, per_u_slot_prb_cap=10),
+            average_throughput=4.0,
+            traffic_profile=TrafficProfile(packet_bits=300, pdb_ms=None),
+            current_radio_state=None,
+            hol_ms=1,
+        )
+        ranked = ranking.rank([no_pdb_slow, no_pdb_fast])
+        self.assertEqual([ue.ue_id for ue in ranked], ["ue-no-pdb-fast", "ue-no-pdb-slow"])
+
+    def test_pdb_user_keeps_overdue_priority(self) -> None:
+        ranking = EpfRankingPolicy()
+        overdue = UserEquipment(
+            ue_id="ue-overdue",
+            lc=LogicalChannel("lc-overdue", [Packet("pkt-overdue", 0, 300, 300, 15, None)], eligible_cycle=0),
+            is_edge_user=False,
+            radio_profile=RadioProfile(bits_per_prb=4, per_u_slot_prb_cap=10),
+            average_throughput=100.0,
+            traffic_profile=TrafficProfile(packet_bits=300, pdb_ms=15),
+            current_radio_state=None,
+            hol_ms=20,
+        )
+        fresh = UserEquipment(
+            ue_id="ue-fresh",
+            lc=LogicalChannel("lc-fresh", [Packet("pkt-fresh", 0, 300, 300, 30, None)], eligible_cycle=0),
+            is_edge_user=False,
+            radio_profile=RadioProfile(bits_per_prb=20, per_u_slot_prb_cap=10),
+            average_throughput=1.0,
+            traffic_profile=TrafficProfile(packet_bits=300, pdb_ms=30),
+            current_radio_state=None,
+            hol_ms=1,
+        )
+        ranked = ranking.rank([fresh, overdue])
+        self.assertEqual([ue.ue_id for ue in ranked], ["ue-overdue", "ue-fresh"])
+
 
 if __name__ == "__main__":
     unittest.main()

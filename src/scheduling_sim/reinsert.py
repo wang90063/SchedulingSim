@@ -17,6 +17,9 @@ class TailAppendPolicy:
 
 
 class ConstrainedInsertPolicy:
+    def __init__(self, deadline_guard_ms: int = 0) -> None:
+        self.deadline_guard_ms = max(0, int(deadline_guard_ms))
+
     def apply(
         self,
         queue: ActiveQueue,
@@ -63,13 +66,16 @@ class ConstrainedInsertPolicy:
         head = ue.lc.head_packet
         if head is None:
             return True
+        if head.pdb_ms is None:
+            return True
         decisions_until_candidate = queue_index // max_ue_per_slot
         wait_ms = self._decision_wait_ms(current_phase, decisions_until_candidate)
         bits_after_current_cycle = max(head.remaining_bits - service_bits_per_decision, 0)
         extra_cycles = 0 if service_bits_per_decision <= 0 else -(-bits_after_current_cycle // service_bits_per_decision)
         completion_ms = now_ms + wait_ms + (extra_cycles * 5)
         deadline_ms = head.arrival_time + head.pdb_ms
-        return completion_ms <= deadline_ms
+        safe_deadline_ms = deadline_ms - self.deadline_guard_ms
+        return completion_ms <= safe_deadline_ms
 
     def _decision_wait_ms(self, current_phase: str, decision_hops: int) -> int:
         if decision_hops <= 0:
@@ -82,9 +88,9 @@ class ConstrainedInsertPolicy:
 
 
 class TargetOnlyConstrainedInsertPolicy:
-    def __init__(self) -> None:
+    def __init__(self, deadline_guard_ms: int = 0) -> None:
         self._tail = TailAppendPolicy()
-        self._constrained = ConstrainedInsertPolicy()
+        self._constrained = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
 
     def apply(
         self,

@@ -10,7 +10,7 @@ PRB_BANDWIDTH_HZ = 180_000
 class TrafficConfig:
     count: int
     packet_bits: int
-    pdb_ms: int
+    pdb_ms: int | None
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
@@ -29,6 +29,8 @@ class SimulationConfig:
     tdd_pattern: str
     random_seed: int = 0
     stop_when_target_edge_finished: bool = False
+    deadline_guard_ms: int = 0
+    avg_rate_ewma_beta: float = 0.9
 
 
 @dataclass(frozen=True)

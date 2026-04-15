@@ -3,7 +3,7 @@ import statistics
 
 class MetricsCollector:
     def __init__(self) -> None:
-        self.completed_packets: list[dict[str, int | str]] = []
+        self.completed_packets: list[dict[str, object]] = []
         self.served_bits_total = 0
         self.served_bits_by_group = {"center": 0, "edge": 0}
         self.served_bits_by_user: dict[str, int] = {}
@@ -20,7 +20,7 @@ class MetricsCollector:
         packet_id: str,
         completion_time: int,
         arrival_time: int,
-        pdb_ms: int,
+        pdb_ms: int | None,
         bits_sent: int,
         user_class: str = "center",
         ue_id: str | None = None,
@@ -67,9 +67,11 @@ class MetricsCollector:
     ) -> dict[str, float]:
         user_list = list(users or [])
         delays = [item["delay_ms"] for item in self.completed_packets] or [0]
-        violations = [item for item in self.completed_packets if item["delay_ms"] > item["pdb_ms"]]
+        pdb_packets = [item for item in self.completed_packets if item["pdb_ms"] is not None]
+        violations = [item for item in pdb_packets if item["delay_ms"] > item["pdb_ms"]]
         center_packets = [item for item in self.completed_packets if item["user_class"] == "center"]
         edge_packets = [item for item in self.completed_packets if item["user_class"] == "edge"]
+        edge_pdb_packets = [item for item in edge_packets if item["pdb_ms"] is not None]
         center_users = [user for user in user_list if not user.is_edge_user]
         edge_users = [user for user in user_list if user.is_edge_user]
         simulation_duration_seconds = simulation_duration_ms / 1000.0 if simulation_duration_ms > 0 else 0.0
@@ -96,6 +98,7 @@ class MetricsCollector:
             1
             for user in edge_users
             if getattr(user.lc, "head_packet", None) is not None
+            and user.lc.head_packet.pdb_ms is not None
             and user.hol_ms > user.lc.head_packet.pdb_ms
         )
         edge_backlog_bits = sum(
@@ -156,7 +159,10 @@ class MetricsCollector:
                     if first_service_time is not None
                     else 0.0
                 ),
-                "target_edge_pdb_met": bool(completion_delay_ms <= float(target_completed["pdb_ms"])),
+                "target_edge_pdb_met": bool(
+                    target_completed["pdb_ms"] is not None
+                    and completion_delay_ms <= float(target_completed["pdb_ms"])
+                ),
                 "target_edge_served_bits": float(target_completed["bits_sent"]),
                 "target_edge_remaining_bits": 0.0,
             }
@@ -205,8 +211,8 @@ class MetricsCollector:
             "edge_avg_delay_ms": statistics.mean([item["delay_ms"] for item in edge_packets]) if edge_packets else 0.0,
             "edge_p95_delay_ms": self._percentile([int(item["delay_ms"]) for item in edge_packets], 0.95),
             "edge_pdb_satisfaction_rate": (
-                sum(1 for item in edge_packets if item["delay_ms"] <= item["pdb_ms"]) / len(edge_packets)
-                if edge_packets
+                sum(1 for item in edge_pdb_packets if item["delay_ms"] <= item["pdb_ms"]) / len(edge_pdb_packets)
+                if edge_pdb_packets
                 else 0.0
             ),
             "center_avg_rate_bps": statistics.mean(center_rates_bps) if center_rates_bps else 0.0,

@@ -16,6 +16,7 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.simulation.tdd_pattern, "DSUUU")
         self.assertEqual(config.simulation.random_seed, 7)
         self.assertFalse(config.simulation.stop_when_target_edge_finished)
+        self.assertEqual(config.simulation.deadline_guard_ms, 0)
         self.assertEqual(config.traffic.edge.count, 4)
         self.assertEqual(config.traffic.center.gbr_bps, 20000.0)
         self.assertEqual(config.radio.environment.mcs_table[-1].bits_per_prb, 120)
@@ -171,6 +172,59 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.radio.center.bits_per_prb, 540)
         self.assertEqual(config.radio.edge.bits_per_prb, 360)
         self.assertTrue(config.simulation.stop_when_target_edge_finished)
+
+    def test_load_config_supports_null_pdb_and_avg_rate_ewma_beta(self) -> None:
+        payload = {
+            "simulation": {
+                "cycles": 2,
+                "slot_duration_ms": 1,
+                "tdd_pattern": "DSUUU",
+                "avg_rate_ewma_beta": 0.8,
+            },
+            "resources": {"total_prb_per_u_slot": 10, "max_ue_per_slot": 2},
+            "traffic": {
+                "center": {"count": 1, "period_slots": 1, "packet_bits": 100, "pdb_ms": None},
+                "edge": {"count": 1, "burst_cycle_interval": 1, "packet_bits": 200, "pdb_ms": 15},
+            },
+            "radio": {
+                "center": {"bits_per_prb": 10, "per_u_slot_prb_cap": 10},
+                "edge": {"bits_per_prb": 10, "per_u_slot_prb_cap": 4},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+            "report": {"output_dir": "outputs/test", "keep_slot_trace": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.simulation.avg_rate_ewma_beta, 0.8)
+        self.assertIsNone(config.traffic.center.pdb_ms)
+
+    def test_load_config_reads_deadline_guard_ms(self) -> None:
+        payload = {
+            "simulation": {
+                "cycles": 1,
+                "slot_duration_ms": 1,
+                "tdd_pattern": "DSUUU",
+                "deadline_guard_ms": 5,
+            },
+            "resources": {"total_prb_per_u_slot": 10, "max_ue_per_slot": 2},
+            "traffic": {
+                "center": {"count": 1, "period_slots": 1, "packet_bits": 100, "pdb_ms": 30},
+                "edge": {"count": 1, "burst_cycle_interval": 1, "packet_bits": 100, "pdb_ms": 15},
+            },
+            "radio": {
+                "center": {"bits_per_prb": 10, "per_u_slot_prb_cap": 10},
+                "edge": {"bits_per_prb": 10, "per_u_slot_prb_cap": 4},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "business_aware_constrained_insert"},
+            "report": {"output_dir": "outputs/test", "keep_slot_trace": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.simulation.deadline_guard_ms, 5)
 
 
 if __name__ == "__main__":

@@ -74,6 +74,43 @@ class ReinsertionPolicyTests(unittest.TestCase):
         ordered = [user.ue_id for user in queue.ordered_users()]
         self.assertEqual(ordered.index(users[0].ue_id), 3)
 
+    def test_constrained_insert_uses_deadline_guard_to_move_target_earlier(self) -> None:
+        queue = ActiveQueue()
+        users = [self.make_ue(f"ue-{index}", remaining_bits=120) for index in range(5)]
+        users[0].lc.head_packet.pdb_ms = 12
+        for user in users:
+            queue.activate(user)
+        policy = ConstrainedInsertPolicy(deadline_guard_ms=5)
+        policy.apply(
+            queue,
+            users[0],
+            queue_wait_size=queue.size,
+            service_bits_per_decision=120,
+            now_ms=8,
+            current_phase="S",
+            max_ue_per_slot=2,
+        )
+        ordered = [user.ue_id for user in queue.ordered_users()]
+        self.assertEqual(ordered.index(users[0].ue_id), 1)
+
+    def test_constrained_insert_treats_no_pdb_packet_as_tail_safe(self) -> None:
+        queue = ActiveQueue()
+        users = [self.make_ue(f"ue-{index}", remaining_bits=120) for index in range(3)]
+        users[0].lc.head_packet.pdb_ms = None
+        users[0].traffic_profile = TrafficProfile(packet_bits=120, pdb_ms=None)
+        for user in users:
+            queue.activate(user)
+        ConstrainedInsertPolicy().apply(
+            queue,
+            users[0],
+            queue_wait_size=queue.size,
+            service_bits_per_decision=120,
+            now_ms=8,
+            current_phase="S",
+            max_ue_per_slot=2,
+        )
+        self.assertEqual(queue.ordered_users()[-1].ue_id, users[0].ue_id)
+
     def test_target_only_constrained_insert_falls_back_to_tail_for_non_target_packets(self) -> None:
         queue = ActiveQueue()
         users = [self.make_ue(f"ue-{index}") for index in range(5)]

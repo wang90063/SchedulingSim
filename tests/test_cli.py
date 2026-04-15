@@ -212,7 +212,7 @@ class CliSmokeTests(unittest.TestCase):
             text=True,
             check=False,
         )
-        self.assertEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0, msg=f"stderr:\n{result.stderr}")
         self.assertIn("edge_packet_kb,400,edge_pdb_ms,100,tail_append", result.stdout)
         self.assertIn(
             "edge_packet_kb,2000,center_user_count,79,business_aware_constrained_insert",

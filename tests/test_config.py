@@ -173,7 +173,7 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.radio.edge.bits_per_prb, 360)
         self.assertTrue(config.simulation.stop_when_target_edge_finished)
 
-    def test_load_config_supports_packet_size_sensitivity_sweep(self) -> None:
+    def test_load_config_ignores_packet_size_sensitivity_sweep_block(self) -> None:
         payload = {
             "simulation": {
                 "cycles": 1000,
@@ -230,6 +230,7 @@ class ConfigLoaderTests(unittest.TestCase):
             path = config_dir / "config.json"
             path.write_text(json.dumps(payload), encoding="utf-8")
             config = load_config(path)
+        self.assertFalse(hasattr(config, "sweep"))
         self.assertEqual(config.radio.edge.edge_per_u_slot_prb_cap, 237)
         self.assertEqual(config.traffic.edge.packet_bits, 3200000)
 

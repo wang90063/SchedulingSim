@@ -198,6 +198,42 @@ class CliSmokeTests(unittest.TestCase):
         self.assertNotIn("窗口内累计 `300 ms queue wait + 200 ms service time`", report_text)
         self.assertNotIn("基线 `0 ms = 300 ms queue wait + 200 ms service time`", report_text)
 
+    def test_target_edge_packet_size_sensitivity_report_script_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                "python",
+                "scripts/run_target_edge_packet_size_sensitivity_report.py",
+                "configs/target_edge_packet_size_sensitivity_main_uncapped.json",
+            ],
+            cwd=repo_root,
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("edge_packet_kb,400,edge_pdb_ms,100,tail_append", result.stdout)
+        self.assertIn(
+            "edge_packet_kb,2000,center_user_count,79,business_aware_constrained_insert",
+            result.stdout,
+        )
+        report_path = (
+            repo_root
+            / "outputs"
+            / "target_edge_packet_size_sensitivity_main_uncapped"
+            / "sensitivity_report.md"
+        )
+        self.assertTrue(report_path.exists())
+        report_text = report_path.read_text(encoding="utf-8")
+        self.assertIn("Target Edge 大包规模敏感性测试报告", report_text)
+        self.assertIn("## `400 KB` 目标边缘大包场景", report_text)
+        self.assertIn("## `2000 KB` 目标边缘大包场景", report_text)
+        self.assertIn("### PDB 趋势分析", report_text)
+        self.assertIn("### 中心用户数趋势分析", report_text)
+        self.assertIn("## 跨包大小趋势总结", report_text)
+        self.assertIn("`edge_per_u_slot_prb_cap = 237`", report_text)
+
     def test_run_command_report_contains_grouped_metrics(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

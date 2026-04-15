@@ -173,6 +173,66 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.radio.edge.bits_per_prb, 360)
         self.assertTrue(config.simulation.stop_when_target_edge_finished)
 
+    def test_load_config_supports_packet_size_sensitivity_sweep(self) -> None:
+        payload = {
+            "simulation": {
+                "cycles": 1000,
+                "slot_duration_ms": 1,
+                "tdd_pattern": "DSUUU",
+                "random_seed": 7,
+                "stop_when_target_edge_finished": True,
+                "deadline_guard_ms": 10,
+            },
+            "resources": {"total_prb_per_u_slot": 237, "max_ue_per_slot": 16},
+            "traffic": {
+                "center": {
+                    "count": 63,
+                    "period_slots": 1,
+                    "packet_bits": 160,
+                    "pdb_ms": 1000000000,
+                    "gbr_bps": 7000,
+                },
+                "edge": {"count": 1, "packet_bits": 3200000, "pdb_ms": 500},
+            },
+            "radio": {
+                "environment": {
+                    "scenario_type": "uma",
+                    "cell_radius_m": 500,
+                    "carrier_frequency_ghz": 3.5,
+                    "noise_figure_db": 7.0,
+                    "interference_margin_db": 3.0,
+                    "shadow_std_db": 4.0,
+                    "slow_fading_alpha": 0.95,
+                    "slot_jitter_std_db": 0.5,
+                    "center_distance_range_m": [50, 150],
+                    "edge_distance_range_m": [375, 475],
+                    "mcs_table_path": "mcs/nr_ul_main.json",
+                },
+                "center": {},
+                "edge": {"edge_per_u_slot_prb_cap": 237},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "business_aware_constrained_insert"},
+            "report": {"output_dir": "outputs/packet-size-test", "keep_slot_trace": False},
+            "sweep": {
+                "policies": ["tail_append", "business_aware_constrained_insert"],
+                "edge_packet_kb": [400, 800, 1200, 1600, 2000],
+                "edge_pdb_ms": [100, 150, 200, 300, 400, 500],
+                "center_user_count": [16, 23, 31, 47, 63, 79],
+            },
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            config_dir = Path(tmp)
+            (config_dir / "mcs").mkdir()
+            (config_dir / "mcs" / "nr_ul_main.json").write_text(
+                json.dumps([{"sinr_db": -5.0, "mcs_index": 0, "spectral_efficiency": 1.0}]),
+                encoding="utf-8",
+            )
+            path = config_dir / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.radio.edge.edge_per_u_slot_prb_cap, 237)
+        self.assertEqual(config.traffic.edge.packet_bits, 3200000)
+
     def test_load_config_supports_null_pdb_and_avg_rate_ewma_beta(self) -> None:
         payload = {
             "simulation": {

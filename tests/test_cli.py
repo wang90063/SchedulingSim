@@ -215,6 +215,14 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, msg=f"stderr:\n{result.stderr}")
         self.assertIn("edge_packet_kb,400,edge_pdb_ms,100,tail_append", result.stdout)
         self.assertIn(
+            "edge_packet_kb,400,center_packet_granularity,160_per_1,tail_append",
+            result.stdout,
+        )
+        self.assertIn(
+            "edge_packet_kb,400,center_packet_granularity,960_per_6,business_aware_constrained_insert",
+            result.stdout,
+        )
+        self.assertIn(
             "edge_packet_kb,2000,center_user_count,79,business_aware_constrained_insert",
             result.stdout,
         )
@@ -230,6 +238,10 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("## `400 KB` 目标边缘大包场景", report_text)
         self.assertIn("## `2000 KB` 目标边缘大包场景", report_text)
         self.assertIn("### PDB 趋势分析", report_text)
+        self.assertIn("### 中心业务颗粒度扫描", report_text)
+        self.assertIn("`160 bit / every 1 slot`", report_text)
+        self.assertIn("`960 bit / every 6 slots`", report_text)
+        self.assertIn("平均 offered load 近似保持一致", report_text)
         self.assertIn("### 中心用户数趋势分析", report_text)
         self.assertIn("## 跨包大小趋势总结", report_text)
         self.assertIn("`edge_per_u_slot_prb_cap = 237`", report_text)

@@ -35,6 +35,13 @@
     "policies": ["tail_append", "business_aware_constrained_insert"],
     "edge_packet_kb": [400, 800, 1200, 1600, 2000],
     "edge_pdb_ms": [100, 150, 200, 300, 400, 500],
+    "center_packet_granularity": [
+      { "packet_bits": 160, "period_slots": 1 },
+      { "packet_bits": 320, "period_slots": 2 },
+      { "packet_bits": 480, "period_slots": 3 },
+      { "packet_bits": 800, "period_slots": 5 },
+      { "packet_bits": 960, "period_slots": 6 }
+    ],
     "center_user_count": [16, 23, 31, 47, 63, 79]
   }
 }

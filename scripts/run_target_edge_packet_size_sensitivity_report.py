@@ -15,6 +15,8 @@ Summary = dict[str, SummaryValue]
 RowValue = float | int | str | bool
 Row = dict[str, RowValue]
 
+CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB = 400
+
 
 def _load_payload(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -29,7 +31,16 @@ def _packet_bits_from_kb(edge_packet_kb: int) -> int:
     return int(edge_packet_kb) * 1000 * 8
 
 
-def _case_config(config, *, edge_packet_kb: int, dimension: str, value: int, policy: str):
+def _granularity_value(packet_bits: int, period_slots: int) -> str:
+    return f"{packet_bits}_per_{period_slots}"
+
+
+def _parse_granularity_value(value: str) -> tuple[int, int]:
+    packet_bits_text, period_slots_text = value.split("_per_")
+    return int(packet_bits_text), int(period_slots_text)
+
+
+def _case_config(config, *, edge_packet_kb: int, dimension: str, value: int | str, policy: str):
     updated = replace(
         config,
         scheduler=replace(config.scheduler, reinsert_policy=policy),
@@ -48,6 +59,19 @@ def _case_config(config, *, edge_packet_kb: int, dimension: str, value: int, pol
             updated,
             traffic=replace(updated.traffic, center=replace(updated.traffic.center, count=value)),
         )
+    if dimension == "center_packet_granularity":
+        packet_bits, period_slots = _parse_granularity_value(str(value))
+        return replace(
+            updated,
+            traffic=replace(
+                updated.traffic,
+                center=replace(
+                    updated.traffic.center,
+                    packet_bits=packet_bits,
+                    period_slots=period_slots,
+                ),
+            ),
+        )
     raise ValueError(f"unsupported dimension: {dimension}")
 
 
@@ -55,7 +79,7 @@ def _build_row(
     *,
     edge_packet_kb: int,
     dimension: str,
-    value: int,
+    value: int | str,
     policy: str,
     summary: Summary,
 ) -> Row:
@@ -123,6 +147,31 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
                         summary=summary,
                     )
                 )
+        if int(edge_packet_kb) == CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB:
+            for item in sweep_spec.get("center_packet_granularity", []):
+                value = _granularity_value(
+                    int(item["packet_bits"]),
+                    int(item["period_slots"]),
+                )
+                for policy in policies:
+                    summary = _run_summary(
+                        _case_config(
+                            config,
+                            edge_packet_kb=int(edge_packet_kb),
+                            dimension="center_packet_granularity",
+                            value=value,
+                            policy=policy,
+                        )
+                    )
+                    rows.append(
+                        _build_row(
+                            edge_packet_kb=int(edge_packet_kb),
+                            dimension="center_packet_granularity",
+                            value=value,
+                            policy=policy,
+                            summary=summary,
+                        )
+                    )
     return rows
 
 
@@ -134,11 +183,16 @@ def _rows_for(rows: list[Row], *, edge_packet_kb: int, dimension: str) -> list[R
     ]
 
 
-def _value_label(dimension: str, value: int) -> str:
-    return {
-        "edge_pdb_ms": f"{value} ms",
-        "center_user_count": f"{value} center users",
-    }[dimension]
+def _value_label(dimension: str, value: int | str) -> str:
+    if dimension == "edge_pdb_ms":
+        return f"{value} ms"
+    if dimension == "center_user_count":
+        return f"{value} center users"
+    if dimension == "center_packet_granularity":
+        packet_bits, period_slots = _parse_granularity_value(str(value))
+        slot_label = "slot" if period_slots == 1 else "slots"
+        return f"{packet_bits} bit / every {period_slots} {slot_label}"
+    raise ValueError(f"unsupported dimension: {dimension}")
 
 
 def _format_completion(row: Row) -> str:
@@ -168,14 +222,36 @@ def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
         "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | 结论 |",
         "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
     ]
-    values = sorted({int(row["value"]) for row in rows})
-    for value in values:
-        baseline = next(row for row in rows if int(row["value"]) == value and row["policy"] == "tail_append")
-        ours = next(
-            row
-            for row in rows
-            if int(row["value"]) == value and row["policy"] == "business_aware_constrained_insert"
+    if dimension == "center_packet_granularity":
+        values = sorted(
+            {str(row["value"]) for row in rows},
+            key=lambda item: _parse_granularity_value(item)[0],
         )
+    else:
+        values = sorted({int(row["value"]) for row in rows})
+    for value in values:
+        if dimension == "center_packet_granularity":
+            baseline = next(
+                row
+                for row in rows
+                if str(row["value"]) == value and row["policy"] == "tail_append"
+            )
+            ours = next(
+                row
+                for row in rows
+                if str(row["value"]) == value
+                and row["policy"] == "business_aware_constrained_insert"
+            )
+        else:
+            baseline = next(
+                row for row in rows if int(row["value"]) == value and row["policy"] == "tail_append"
+            )
+            ours = next(
+                row
+                for row in rows
+                if int(row["value"]) == value
+                and row["policy"] == "business_aware_constrained_insert"
+            )
         lines.append(
             "| "
             f"`{_value_label(dimension, value)}` | "
@@ -201,34 +277,58 @@ def _packet_size_heading(edge_packet_kb: int) -> str:
 def _build_packet_size_section(edge_packet_kb: int, rows: list[Row]) -> str:
     pdb_rows = _rows_for(rows, edge_packet_kb=edge_packet_kb, dimension="edge_pdb_ms")
     center_rows = _rows_for(rows, edge_packet_kb=edge_packet_kb, dimension="center_user_count")
-    return "\n".join(
+    granularity_rows = _rows_for(
+        rows,
+        edge_packet_kb=edge_packet_kb,
+        dimension="center_packet_granularity",
+    )
+    lines = [
+        _packet_size_heading(edge_packet_kb),
+        "",
+        f"- 固定 `edge_packet_kb = {edge_packet_kb}`",
+        "- 固定 `edge_per_u_slot_prb_cap = 237`",
+        "",
+        "### PDB 扫描",
+        "- 固定 `center_user_count = 63`",
+        "",
+        *_build_table(pdb_rows, dimension="edge_pdb_ms"),
+        "",
+        "### PDB 趋势分析",
+        "- 重点解释 `PDB` 收紧或放松时，完成时延收益主要来自 `Queue Wait` 还是 `Service Time`。",
+        "- 重点解释在当前包大小下，deadline 压力是否让 `business_aware_constrained_insert` 更容易压缩 `Inter-Service Gap Wait`。",
+        "",
+        "### 中心用户数扫描",
+        "- 固定 `edge_pdb_ms = 500`",
+        "",
+        *_build_table(center_rows, dimension="center_user_count"),
+        "",
+        "### 中心用户数趋势分析",
+        "- 重点解释负载升高后，baseline 队尾轮转等待如何放大，以及我们的收益与中心吞吐代价是否同步扩大。",
+        "",
+    ]
+    if edge_packet_kb == CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB and granularity_rows:
+        lines.extend(
+            [
+                "### 中心业务颗粒度扫描",
+                "- 固定 `edge_pdb_ms = 500`",
+                "- 固定 `center_user_count = 63`",
+                "- 这些档位按设计让平均 offered load 近似保持一致，重点观察颗粒度变化是否改变调度窗口利用方式。",
+                "",
+                *_build_table(granularity_rows, dimension="center_packet_granularity"),
+                "",
+                "### 中心业务颗粒度趋势分析",
+                "- 重点观察中心业务更细或更粗时，目标边缘包的排队碎片化是否发生明显变化。",
+                "- 重点观察两种策略在近似等 offered load 下，差异是否主要体现为 `Queue Wait` 的波动收敛。",
+                "",
+            ]
+        )
+    lines.extend(
         [
-            _packet_size_heading(edge_packet_kb),
-            "",
-            f"- 固定 `edge_packet_kb = {edge_packet_kb}`",
-            "- 固定 `edge_per_u_slot_prb_cap = 237`",
-            "",
-            "### PDB 扫描",
-            "- 固定 `center_user_count = 63`",
-            "",
-            *_build_table(pdb_rows, dimension="edge_pdb_ms"),
-            "",
-            "### PDB 趋势分析",
-            "- 重点解释 `PDB` 收紧或放松时，完成时延收益主要来自 `Queue Wait` 还是 `Service Time`。",
-            "- 重点解释在当前包大小下，deadline 压力是否让 `business_aware_constrained_insert` 更容易压缩 `Inter-Service Gap Wait`。",
-            "",
-            "### 中心用户数扫描",
-            "- 固定 `edge_pdb_ms = 500`",
-            "",
-            *_build_table(center_rows, dimension="center_user_count"),
-            "",
-            "### 中心用户数趋势分析",
-            "- 重点解释负载升高后，baseline 队尾轮转等待如何放大，以及我们的收益与中心吞吐代价是否同步扩大。",
-            "",
             "### 小结",
             "- 总结该包大小下的主要收益区间、主要代价和是否出现策略收敛。",
         ]
     )
+    return "\n".join(lines)
 
 
 def _write_markdown_report(payload: dict[str, Any], output_dir: Path, rows: list[Row]) -> None:
@@ -286,7 +386,7 @@ def _write_outputs(output_dir: Path, rows: list[Row]) -> None:
             "scope": "edge_packet_kb",
             "edge_packet_kb": int(row["edge_packet_kb"]),
             "dimension": str(row["dimension"]),
-            "value": int(row["value"]),
+            "value": row["value"],
             "policy": str(row["policy"]),
         }
         for row in rows

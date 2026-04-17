@@ -5,6 +5,9 @@ class EpfRankingPolicy:
     def rank(self, users: list[UserEquipment]) -> list[UserEquipment]:
         return sorted(users, key=self._weight, reverse=True)
 
+    def weight(self, ue: UserEquipment) -> float:
+        return self._weight(ue)
+
     def _weight(self, ue: UserEquipment) -> float:
         head = ue.lc.head_packet
         if head is None:

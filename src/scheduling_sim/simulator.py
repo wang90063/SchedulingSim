@@ -7,12 +7,13 @@ from scheduling_sim.wireless_env import McsEntryView, StableWirelessEnv, Wireles
 
 
 class UlSimulator:
-    def __init__(self, config, users, metrics, wireless_env=None) -> None:
+    def __init__(self, config, users, metrics, wireless_env=None, diagnostic_collector=None) -> None:
         self.config = config
         self.users = users
         self.metrics = metrics
         self.queue = ActiveQueue()
         self.ranking = EpfRankingPolicy()
+        self.diagnostic_collector = diagnostic_collector
         self.planner = PhasePrbPlanner(config.resources.total_prb_per_u_slot)
         deadline_guard_ms = int(getattr(config.simulation, "deadline_guard_ms", 0))
         if config.scheduler.reinsert_policy == "tail_append":
@@ -124,6 +125,15 @@ class UlSimulator:
                 self.wireless_env.refresh_slot(refresh_users, slot_index=slot_index, slot_name=phase)
         candidates = self.collect_candidates(phase)
         ranked = self.ranking.rank(candidates)
+        if self.diagnostic_collector is not None:
+            self.diagnostic_collector.capture(
+                queue=self.queue,
+                candidates=candidates,
+                ranked=ranked,
+                ranking_policy=self.ranking,
+                time_ms=now_ms,
+                phase=phase,
+            )
         plan = self.planner.plan_phase(phase, ranked)
         for user in candidates:
             service_bits = sum(

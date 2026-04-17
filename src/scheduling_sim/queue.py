@@ -23,6 +23,12 @@ class ActiveQueue:
     def contains(self, ue: UserEquipment) -> bool:
         return ue in self._users
 
+    def index_of(self, ue: UserEquipment) -> int | None:
+        try:
+            return self._users.index(ue)
+        except ValueError:
+            return None
+
     def ordered_users(self) -> list[UserEquipment]:
         return list(self._users)
 

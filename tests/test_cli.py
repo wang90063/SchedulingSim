@@ -96,6 +96,54 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("100,business_aware_constrained_insert", result.stdout)
         self.assertIn("200,tail_append", result.stdout)
 
+    def test_target_edge_pdb_dominance_diagnostic_script_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                "python",
+                "scripts/run_target_edge_pdb_dominance_diagnostic.py",
+                "configs/target_edge_pdb_dominance_diagnostic.json",
+            ],
+            cwd=repo_root,
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=f"stderr:\n{result.stderr}")
+        self.assertIn("policy,time_ms,phase,queue_rank", result.stdout)
+        self.assertIn("tail_append", result.stdout)
+        self.assertIn("business_aware_constrained_insert", result.stdout)
+
+        output_dir = repo_root / "outputs" / "target_edge_pdb_dominance_diagnostic"
+        self.assertTrue((output_dir / "diagnostic_report.md").exists())
+        self.assertTrue((output_dir / "decision_trace.csv").exists())
+        self.assertTrue((output_dir / "decision_trace.json").exists())
+        self.assertTrue((output_dir / "queue_position_vs_time.png").exists())
+        self.assertTrue((output_dir / "epf_rank_vs_time.png").exists())
+        self.assertTrue((output_dir / "epf_rank_vs_time_first_100ms.png").exists())
+        self.assertTrue((output_dir / "dominance_terms_vs_time.png").exists())
+        self.assertTrue((output_dir / "dominance_terms_tail_append.png").exists())
+        self.assertTrue((output_dir / "dominance_terms_business_aware_constrained_insert.png").exists())
+        self.assertTrue((output_dir / "dominance_timeline.png").exists())
+        self.assertTrue((output_dir / "dominance_timeline_tail_append.png").exists())
+        self.assertTrue((output_dir / "dominance_timeline_business_aware_constrained_insert.png").exists())
+
+        report_text = (output_dir / "diagnostic_report.md").read_text(encoding="utf-8")
+        self.assertIn("Target Edge PDB Dominance Diagnostic", report_text)
+        self.assertIn("queue_position_vs_time.png", report_text)
+        self.assertIn("epf_rank_vs_time.png", report_text)
+        self.assertIn("epf_rank_vs_time_first_100ms.png", report_text)
+        self.assertIn("dominance_terms_vs_time.png", report_text)
+        self.assertIn("dominance_terms_tail_append.png", report_text)
+        self.assertIn("dominance_terms_business_aware_constrained_insert.png", report_text)
+        self.assertIn("dominance_timeline.png", report_text)
+        self.assertIn("dominance_timeline_tail_append.png", report_text)
+        self.assertIn("dominance_timeline_business_aware_constrained_insert.png", report_text)
+        self.assertIn("queue_limited", report_text)
+        self.assertIn("spectral_dominated", report_text)
+        self.assertIn("pdb_dominated", report_text)
+
     def test_target_edge_sensitivity_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         result = subprocess.run(

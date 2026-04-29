@@ -6,6 +6,7 @@ from pathlib import Path
 
 from scheduling_sim.config import load_config
 from scheduling_sim.metrics import MetricsCollector
+from scheduling_sim.report_rows import build_common_summary_row
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
@@ -41,12 +42,8 @@ def main() -> int:
                 {
                     "edge_pdb_ms": edge_pdb_ms,
                     "policy": policy,
-                    "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
-                    "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
-                    "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
-                    "target_edge_pdb_met": summary["target_edge_pdb_met"],
                     "center_user_gbr_satisfaction_rate": summary["center_user_gbr_satisfaction_rate"],
-                    "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                    **build_common_summary_row(summary),
                 }
             )
     output_dir = Path(config.report.output_dir)

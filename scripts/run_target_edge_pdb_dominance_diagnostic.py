@@ -85,18 +85,41 @@ def _summarize_rows(rows: list[dict[str, object]]) -> dict[str, object]:
     }
 
 
+def _decision_axis(rows: list[dict[str, object]]) -> tuple[list[int], list[str]]:
+    xs = list(range(len(rows)))
+    labels = [f"{row['phase']}@{row['time_ms']}" for row in rows]
+    return xs, labels
+
+
+def _apply_sparse_decision_ticks(ax, xs: list[int], labels: list[str]) -> None:
+    if not xs:
+        return
+    step = max(1, len(xs) // 12)
+    tick_indexes = list(range(0, len(xs), step))
+    if tick_indexes[-1] != len(xs) - 1:
+        tick_indexes.append(len(xs) - 1)
+    ax.set_xticks([xs[index] for index in tick_indexes])
+    ax.set_xticklabels([labels[index] for index in tick_indexes], rotation=45, ha="right")
+
+
 def _plot_queue_position(rows_by_policy: dict[str, list[dict[str, object]]], output_dir: Path) -> None:
     fig, ax = plt.subplots(figsize=(10, 4))
+    axis_labels: list[str] = []
+    axis_xs: list[int] = []
     for policy, rows in rows_by_policy.items():
-        xs = [int(row["time_ms"]) for row in rows]
+        xs, labels = _decision_axis(rows)
+        if len(xs) > len(axis_xs):
+            axis_xs = xs
+            axis_labels = labels
         ys = [int(row["queue_rank"]) for row in rows]
         ax.plot(xs, ys, marker="o", markersize=3, linewidth=1.2, label=policy)
-    ax.set_title("Target Edge Queue Position vs Time")
-    ax.set_xlabel("time_ms")
+    ax.set_title("Target Edge Queue Position vs D/S Decisions")
+    ax.set_xlabel("D/S decision index")
     ax.set_ylabel("queue_rank")
     ax.invert_yaxis()
     ax.legend()
     ax.grid(True, alpha=0.3)
+    _apply_sparse_decision_ticks(ax, axis_xs, axis_labels)
     fig.tight_layout()
     fig.savefig(output_dir / "queue_position_vs_time.png", dpi=150)
     plt.close(fig)

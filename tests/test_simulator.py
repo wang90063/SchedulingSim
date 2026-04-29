@@ -643,6 +643,52 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["target_edge_time_to_first_service_ms"], 2.0)
         self.assertTrue(summary["target_edge_pdb_met"])
 
+    def test_metrics_report_contains_window_and_prb_breakdown(self) -> None:
+        collector = MetricsCollector()
+        center_user = self._make_user("center-0", is_edge_user=False, gbr_bps=12000.0)
+        edge_user = self._make_user("edge-0", is_edge_user=True, gbr_bps=0.0)
+        collector.record_bits_served(user_class="center", bits_sent=200, ue_id=center_user.ue_id)
+        collector.record_bits_served(user_class="edge", bits_sent=80, ue_id=edge_user.ue_id)
+        collector.record_prb_used(user_class="center", prb_count=5)
+        collector.record_prb_used(user_class="edge", prb_count=3)
+        collector.record_packet_completed(
+            packet_id="edge-0-target",
+            completion_time=10,
+            arrival_time=0,
+            pdb_ms=15,
+            bits_sent=80,
+            user_class="edge",
+            ue_id=edge_user.ue_id,
+            is_target=True,
+            first_service_time=2,
+            service_slot_count=1,
+            control_slot_count_while_pending=2,
+            waiting_u_slot_count_before_first_service=0,
+            waiting_u_slot_count_after_first_service=0,
+        )
+        summary = collector.build_summary(
+            total_prb_used=8,
+            total_prb_available=10,
+            users=[center_user, edge_user],
+            simulation_duration_ms=10,
+            slot_duration_ms=1,
+        )
+        self.assertEqual(summary["analysis_window_ms"], 10.0)
+        self.assertEqual(summary["center_total_bits"], 200.0)
+        self.assertEqual(summary["edge_total_bits"], 80.0)
+        self.assertEqual(summary["target_edge_total_bits"], 80.0)
+        self.assertEqual(summary["system_total_bits"], 280.0)
+        self.assertEqual(summary["center_agg_rate_bps"], 20000.0)
+        self.assertEqual(summary["edge_agg_rate_bps"], 8000.0)
+        self.assertEqual(summary["target_edge_rate_bps"], 8000.0)
+        self.assertEqual(summary["system_agg_rate_bps"], 28000.0)
+        self.assertEqual(summary["center_used_prb"], 5.0)
+        self.assertEqual(summary["edge_used_prb"], 3.0)
+        self.assertEqual(summary["center_prb_share"], 0.625)
+        self.assertEqual(summary["edge_prb_share"], 0.375)
+        self.assertEqual(summary["center_bits_per_used_prb"], 40.0)
+        self.assertEqual(summary["edge_bits_per_used_prb"], 80.0 / 3.0)
+
     def test_metrics_ignore_packets_without_pdb_in_deadline_kpis(self) -> None:
         collector = MetricsCollector()
         collector.record_packet_completed(

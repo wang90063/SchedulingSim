@@ -250,6 +250,12 @@ class UlSimulator:
         self._track_target_u_slot_wait(grant_bits_by_user)
         for user in self.users:
             bits_budget = grant_bits_by_user.get(user.ue_id, 0)
+            prb_count = prb_count_by_user.get(user.ue_id, 0)
+            if prb_count > 0 and hasattr(self.metrics, "record_prb_used"):
+                self.metrics.record_prb_used(
+                    user_class="edge" if user.is_edge_user else "center",
+                    prb_count=prb_count,
+                )
             if bits_budget <= 0:
                 continue
             self._consume_user_bits(user, bits_budget, now_ms)

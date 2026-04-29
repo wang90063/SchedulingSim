@@ -1,8 +1,309 @@
+import csv
 import json
 import os
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+
+
+TRADEOFF_CSV_FIELDNAMES = [
+    "edge_packet_kb",
+    "edge_packet_bits",
+    "dimension",
+    "value",
+    "policy",
+    "total_prb_per_u_slot",
+    "center_pdb_ms",
+    "edge_per_u_slot_prb_cap",
+    "target_edge_finished",
+    "target_edge_completion_delay_ms",
+    "target_edge_queue_wait_ms",
+    "target_edge_service_time_ms",
+    "target_edge_control_phase_wait_ms",
+    "target_edge_pre_first_service_wait_ms",
+    "target_edge_inter_service_gap_wait_ms",
+    "target_edge_time_to_first_service_ms",
+    "target_edge_pdb_met",
+    "target_edge_remaining_bits",
+    "center_avg_rate_bps",
+    "prb_utilization",
+    "analysis_window_ms",
+    "center_total_bits",
+    "edge_total_bits",
+    "target_edge_total_bits",
+    "system_total_bits",
+    "center_agg_rate_bps",
+    "edge_agg_rate_bps",
+    "target_edge_rate_bps",
+    "system_agg_rate_bps",
+    "center_used_prb",
+    "edge_used_prb",
+    "center_prb_share",
+    "edge_prb_share",
+    "center_bits_per_used_prb",
+    "edge_bits_per_used_prb",
+]
+
+
+def _tradeoff_row(
+    *,
+    dimension: str,
+    value: int,
+    policy: str,
+    completion_ms: float,
+    queue_ms: float,
+    service_ms: float,
+    center_avg_bps: float,
+    prb_util: float,
+    center_share: float,
+    edge_share: float,
+    system_rate_bps: float,
+    center_count: int | None = None,
+) -> dict[str, object]:
+    if center_count is not None:
+        resolved_center_count = center_count
+    elif dimension == "center_user_count":
+        resolved_center_count = value
+    else:
+        resolved_center_count = 63
+    center_agg_rate_bps = center_avg_bps * float(resolved_center_count)
+    edge_agg_rate_bps = max(system_rate_bps - center_agg_rate_bps, 1.0)
+    return {
+        "edge_packet_kb": 400,
+        "edge_packet_bits": 3200000,
+        "dimension": dimension,
+        "value": value,
+        "policy": policy,
+        "total_prb_per_u_slot": 273,
+        "center_pdb_ms": "null",
+        "edge_per_u_slot_prb_cap": 273,
+        "target_edge_finished": True,
+        "target_edge_completion_delay_ms": completion_ms,
+        "target_edge_queue_wait_ms": queue_ms,
+        "target_edge_service_time_ms": service_ms,
+        "target_edge_control_phase_wait_ms": 100.0,
+        "target_edge_pre_first_service_wait_ms": 4.0,
+        "target_edge_inter_service_gap_wait_ms": max(queue_ms - 104.0, 0.0),
+        "target_edge_time_to_first_service_ms": 8.0,
+        "target_edge_pdb_met": True,
+        "target_edge_remaining_bits": 0.0,
+        "center_avg_rate_bps": center_avg_bps,
+        "prb_utilization": prb_util,
+        "analysis_window_ms": completion_ms,
+        "center_total_bits": center_agg_rate_bps * completion_ms / 1000.0,
+        "edge_total_bits": 3200000.0,
+        "target_edge_total_bits": 3200000.0,
+        "system_total_bits": system_rate_bps * completion_ms / 1000.0,
+        "center_agg_rate_bps": center_agg_rate_bps,
+        "edge_agg_rate_bps": edge_agg_rate_bps,
+        "target_edge_rate_bps": edge_agg_rate_bps,
+        "system_agg_rate_bps": system_rate_bps,
+        "center_used_prb": 1000.0 * center_share,
+        "edge_used_prb": 1000.0 * edge_share,
+        "center_prb_share": center_share,
+        "edge_prb_share": edge_share,
+        "center_bits_per_used_prb": 450.0,
+        "edge_bits_per_used_prb": 75.0,
+    }
+
+
+def _write_tradeoff_fixture(root: Path) -> None:
+    fixture_dir = root / "target_edge_packet_size_sensitivity_400kb"
+    fixture_dir.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "simulation": {
+            "cycles": 1000,
+            "slot_duration_ms": 1,
+            "tdd_pattern": "DSUUU",
+            "random_seed": 7,
+            "stop_when_target_edge_finished": True,
+            "deadline_guard_ms": 10,
+        },
+        "resources": {"total_prb_per_u_slot": 273, "max_ue_per_slot": 16},
+        "traffic": {
+            "center": {
+                "count": 63,
+                "period_slots": 6,
+                "packet_bits": 960,
+                "pdb_ms": None,
+                "gbr_bps": 7000,
+            },
+            "edge": {"count": 1, "packet_bits": 3200000, "pdb_ms": 500},
+        },
+        "radio": {
+            "environment": {
+                "scenario_type": "uma",
+                "center_distance_range_m": [50, 150],
+                "edge_distance_range_m": [375, 475],
+            },
+            "edge": {"edge_per_u_slot_prb_cap": 273},
+        },
+    }
+    (fixture_dir / "config_rerun.json").write_text(json.dumps(payload), encoding="utf-8")
+    rows = [
+        _tradeoff_row(
+            dimension="center_user_count",
+            value=31,
+            policy="tail_append",
+            completion_ms=553.0,
+            queue_ms=278.0,
+            service_ms=275.0,
+            center_avg_bps=93790.93507554103,
+            prb_util=0.771643261069243,
+            center_share=0.06278682882055989,
+            edge_share=0.9372131711794401,
+            system_rate_bps=8694137.432188064,
+        ),
+        _tradeoff_row(
+            dimension="center_user_count",
+            value=31,
+            policy="business_aware_constrained_insert",
+            completion_ms=453.0,
+            queue_ms=186.0,
+            service_ms=267.0,
+            center_avg_bps=97483.44370860927,
+            prb_util=0.9768865820526337,
+            center_share=0.051485340306891926,
+            edge_share=0.9485146596931081,
+            system_rate_bps=10086004.415011037,
+        ),
+        _tradeoff_row(
+            dimension="center_user_count",
+            value=63,
+            policy="tail_append",
+            completion_ms=890.0,
+            queue_ms=712.0,
+            service_ms=178.0,
+            center_avg_bps=86601.9796682718,
+            prb_util=0.31521038262611295,
+            center_share=0.24196988161559888,
+            edge_share=0.7580301183844012,
+            system_rate_bps=9051430.337078651,
+        ),
+        _tradeoff_row(
+            dimension="center_user_count",
+            value=63,
+            policy="business_aware_constrained_insert",
+            completion_ms=490.0,
+            queue_ms=297.0,
+            service_ms=193.0,
+            center_avg_bps=94448.36410754778,
+            prb_util=0.6405646507687324,
+            center_share=0.1197168031431739,
+            edge_share=0.8802831968568261,
+            system_rate_bps=12480859.18367347,
+        ),
+        _tradeoff_row(
+            dimension="center_packet_load_per_6_slots",
+            value=6400,
+            policy="tail_append",
+            completion_ms=1089.0,
+            queue_ms=919.0,
+            service_ms=170.0,
+            center_avg_bps=556904.9951171164,
+            prb_util=0.6601540368768546,
+            center_share=0.7046097633513192,
+            edge_share=0.2953902366486808,
+            system_rate_bps=38023490.35812672,
+        ),
+        _tradeoff_row(
+            dimension="center_packet_load_per_6_slots",
+            value=6400,
+            policy="business_aware_constrained_insert",
+            completion_ms=490.0,
+            queue_ms=201.0,
+            service_ms=289.0,
+            center_avg_bps=610147.5866537091,
+            prb_util=0.9928733398121153,
+            center_share=0.49829338687413727,
+            edge_share=0.5017066131258627,
+            system_rate_bps=44969910.20408163,
+        ),
+        _tradeoff_row(
+            dimension="center_packet_load_per_6_slots",
+            value=12000,
+            policy="tail_append",
+            completion_ms=1170.0,
+            queue_ms=979.0,
+            service_ms=191.0,
+            center_avg_bps=999252.9236195904,
+            prb_util=0.9557204428999301,
+            center_share=0.8254476960034942,
+            edge_share=0.1745523039965058,
+            system_rate_bps=65687976.92307693,
+        ),
+        _tradeoff_row(
+            dimension="center_packet_load_per_6_slots",
+            value=12000,
+            policy="business_aware_constrained_insert",
+            completion_ms=623.0,
+            queue_ms=427.0,
+            service_ms=196.0,
+            center_avg_bps=879365.181278504,
+            prb_util=0.9796619823429474,
+            center_share=0.6982698129473326,
+            edge_share=0.30173018705266746,
+            system_rate_bps=60536443.0176565,
+        ),
+        _tradeoff_row(
+            dimension="edge_pdb_ms",
+            value=100,
+            policy="tail_append",
+            completion_ms=869.0,
+            queue_ms=696.0,
+            service_ms=173.0,
+            center_avg_bps=76658.11825305496,
+            prb_util=0.3140269838926269,
+            center_share=0.2170155602821001,
+            edge_share=0.7829844397178999,
+            system_rate_bps=8511855.00575374,
+        ),
+        _tradeoff_row(
+            dimension="edge_pdb_ms",
+            value=100,
+            policy="business_aware_constrained_insert",
+            completion_ms=268.0,
+            queue_ms=112.0,
+            service_ms=156.0,
+            center_avg_bps=36174.07012556266,
+            prb_util=0.9728250915750916,
+            center_share=0.03111100651872073,
+            edge_share=0.9688889934812792,
+            system_rate_bps=14219264.925373133,
+        ),
+        _tradeoff_row(
+            dimension="edge_pdb_ms",
+            value=500,
+            policy="tail_append",
+            completion_ms=890.0,
+            queue_ms=712.0,
+            service_ms=178.0,
+            center_avg_bps=86601.9796682718,
+            prb_util=0.31521038262611295,
+            center_share=0.24196988161559888,
+            edge_share=0.7580301183844012,
+            system_rate_bps=9051430.337078651,
+        ),
+        _tradeoff_row(
+            dimension="edge_pdb_ms",
+            value=500,
+            policy="business_aware_constrained_insert",
+            completion_ms=490.0,
+            queue_ms=297.0,
+            service_ms=193.0,
+            center_avg_bps=94448.36410754778,
+            prb_util=0.6405646507687324,
+            center_share=0.1197168031431739,
+            edge_share=0.8802831968568261,
+            system_rate_bps=12480859.18367347,
+        ),
+    ]
+    csv_path = fixture_dir / "sensitivity_rows.csv"
+    with csv_path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=TRADEOFF_CSV_FIELDNAMES)
+        writer.writeheader()
+        writer.writerows(rows)
 
 
 class CliSmokeTests(unittest.TestCase):
@@ -92,7 +393,9 @@ class CliSmokeTests(unittest.TestCase):
             check=False,
         )
         self.assertEqual(result.returncode, 0)
-        self.assertIn("edge_pdb_ms,policy,target_edge_completion_delay_ms", result.stdout)
+        self.assertIn("edge_pdb_ms,policy,center_user_gbr_satisfaction_rate", result.stdout)
+        self.assertIn("analysis_window_ms", result.stdout)
+        self.assertIn("center_used_prb", result.stdout)
         self.assertIn("100,business_aware_constrained_insert", result.stdout)
         self.assertIn("200,tail_append", result.stdout)
 
@@ -290,9 +593,101 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("`160 bit / every 1 slot`", report_text)
         self.assertIn("`960 bit / every 6 slots`", report_text)
         self.assertIn("平均 offered load 近似保持一致", report_text)
+        self.assertIn("### 中心业务负载扫描（固定 every 6 slots）", report_text)
+        self.assertIn(
+            "edge_packet_kb,400,center_packet_load_per_6_slots,3200,business_aware_constrained_insert",
+            result.stdout,
+        )
+        self.assertIn(
+            "edge_packet_kb,400,center_packet_load_per_6_slots,8000,business_aware_constrained_insert",
+            result.stdout,
+        )
+        self.assertIn(
+            "edge_packet_kb,400,center_packet_load_per_6_slots,16000,business_aware_constrained_insert",
+            result.stdout,
+        )
+        self.assertIn("`3200 bit / every 6 slots`", report_text)
+        self.assertIn("`8000 bit / every 6 slots`", report_text)
+        self.assertIn("`16000 bit / every 6 slots`", report_text)
+        self.assertIn("总 offered load 增大", report_text)
+        self.assertIn("Baseline PRB Util", report_text)
+        self.assertIn("Ours PRB Util", report_text)
+        self.assertIn("`PRB Utilization`：系统在当前统计窗口内的 `total_prb_used / total_prb_available`", report_text)
+        self.assertIn("拐点", report_text)
+        self.assertIn("`4800 bit / every 6 slots`", report_text)
         self.assertIn("### 中心用户数趋势分析", report_text)
         self.assertIn("## 跨包大小趋势总结", report_text)
         self.assertIn("`edge_per_u_slot_prb_cap = 237`", report_text)
+        rows_path = (
+            repo_root
+            / "outputs"
+            / "target_edge_packet_size_sensitivity_main_uncapped"
+            / "sensitivity_rows.csv"
+        )
+        rows_text = rows_path.read_text(encoding="utf-8")
+        self.assertIn("analysis_window_ms", rows_text)
+        self.assertIn("center_total_bits", rows_text)
+        self.assertIn("edge_total_bits", rows_text)
+        self.assertIn("target_edge_total_bits", rows_text)
+        self.assertIn("system_total_bits", rows_text)
+        self.assertIn("center_agg_rate_bps", rows_text)
+        self.assertIn("edge_agg_rate_bps", rows_text)
+        self.assertIn("target_edge_rate_bps", rows_text)
+        self.assertIn("system_agg_rate_bps", rows_text)
+        self.assertIn("center_used_prb", rows_text)
+        self.assertIn("edge_used_prb", rows_text)
+        self.assertIn("center_prb_share", rows_text)
+        self.assertIn("edge_prb_share", rows_text)
+        self.assertIn("center_bits_per_used_prb", rows_text)
+        self.assertIn("edge_bits_per_used_prb", rows_text)
+
+    def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp_dir:
+            result_root = Path(temp_dir) / "results"
+            _write_tradeoff_fixture(result_root)
+            result = subprocess.run(
+                [
+                    "python",
+                    "scripts/render_edge_delay_throughput_tradeoff_report.py",
+                    str(result_root),
+                ],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=f"stderr:\n{result.stderr}")
+            self.assertIn(
+                "uplink_scheduler_edge_delay_throughput_tradeoff_report.md",
+                result.stdout,
+            )
+
+            artifacts = [
+                result_root / "uplink_scheduler_edge_delay_throughput_tradeoff_report.md",
+                result_root / "user_count_sensitivity_edge_delay_breakdown.png",
+                result_root / "user_count_sensitivity_center_rate_prb_util.png",
+                result_root / "center_load_sensitivity_edge_delay_breakdown.png",
+                result_root / "center_load_sensitivity_center_rate_prb_util.png",
+                result_root / "latency_throughput_tradeoff_pdb_anchors.png",
+            ]
+            for artifact in artifacts:
+                self.assertTrue(artifact.exists(), msg=f"missing: {artifact}")
+                self.assertGreater(artifact.stat().st_size, 0, msg=f"empty: {artifact}")
+
+            report_text = (result_root / "uplink_scheduler_edge_delay_throughput_tradeoff_report.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("系统实现结构、系统参数与业务模型", report_text)
+            self.assertIn("边缘时延收益与中心吞吐代价的权衡分析", report_text)
+            self.assertIn("Latency Gain (%)", report_text)
+            self.assertIn("Center Throughput Retention (%)", report_text)
+            self.assertIn("Baseline Queue (ms)", report_text)
+            self.assertIn("Ours Service (ms)", report_text)
+            self.assertNotIn("System Throughput Retention (%)", report_text)
+            self.assertIn("user_count_sensitivity_edge_delay_breakdown.png", report_text)
+            self.assertIn("latency_throughput_tradeoff_pdb_anchors.png", report_text)
 
     def test_run_command_report_contains_grouped_metrics(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -314,6 +709,21 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("edge_avg_hol_ms", summary)
         self.assertIn("target_edge_completion_delay_ms", summary)
         self.assertIn("target_edge_queue_wait_ms", summary)
+        self.assertIn("analysis_window_ms", summary)
+        self.assertIn("center_total_bits", summary)
+        self.assertIn("edge_total_bits", summary)
+        self.assertIn("target_edge_total_bits", summary)
+        self.assertIn("system_total_bits", summary)
+        self.assertIn("center_agg_rate_bps", summary)
+        self.assertIn("edge_agg_rate_bps", summary)
+        self.assertIn("target_edge_rate_bps", summary)
+        self.assertIn("system_agg_rate_bps", summary)
+        self.assertIn("center_used_prb", summary)
+        self.assertIn("edge_used_prb", summary)
+        self.assertIn("center_prb_share", summary)
+        self.assertIn("edge_prb_share", summary)
+        self.assertIn("center_bits_per_used_prb", summary)
+        self.assertIn("edge_bits_per_used_prb", summary)
 
 
 if __name__ == "__main__":

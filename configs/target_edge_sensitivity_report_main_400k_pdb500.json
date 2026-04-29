@@ -9,7 +9,7 @@
   },
   "resources": { "total_prb_per_u_slot": 237, "max_ue_per_slot": 16 },
   "traffic": {
-    "center": { "count": 63, "period_slots": 1, "packet_bits": 160, "pdb_ms": 1000000000, "gbr_bps": 7000 },
+    "center": { "count": 63, "period_slots": 1, "packet_bits": 160, "pdb_ms": null, "gbr_bps": 7000 },
     "edge": { "count": 1, "packet_bits": 400000, "pdb_ms": 500 }
   },
   "radio": {

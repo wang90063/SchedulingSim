@@ -7,6 +7,7 @@ class MetricsCollector:
         self.served_bits_total = 0
         self.served_bits_by_group = {"center": 0, "edge": 0}
         self.served_bits_by_user: dict[str, int] = {}
+        self.used_prb_by_group = {"center": 0, "edge": 0}
 
     def record_bits_served(self, user_class: str, bits_sent: int, ue_id: str | None = None) -> None:
         normalized_class = user_class if user_class in self.served_bits_by_group else "center"
@@ -14,6 +15,10 @@ class MetricsCollector:
         self.served_bits_by_group[normalized_class] += bits_sent
         if ue_id is not None:
             self.served_bits_by_user[ue_id] = self.served_bits_by_user.get(ue_id, 0) + bits_sent
+
+    def record_prb_used(self, user_class: str, prb_count: int) -> None:
+        normalized_class = user_class if user_class in self.used_prb_by_group else "center"
+        self.used_prb_by_group[normalized_class] += prb_count
 
     def record_packet_completed(
         self,
@@ -75,6 +80,11 @@ class MetricsCollector:
         center_users = [user for user in user_list if not user.is_edge_user]
         edge_users = [user for user in user_list if user.is_edge_user]
         simulation_duration_seconds = simulation_duration_ms / 1000.0 if simulation_duration_ms > 0 else 0.0
+        center_total_bits = float(self.served_bits_by_group["center"])
+        edge_total_bits = float(self.served_bits_by_group["edge"])
+        system_total_bits = float(self.served_bits_total)
+        center_used_prb = float(self.used_prb_by_group["center"])
+        edge_used_prb = float(self.used_prb_by_group["edge"])
         center_rates_bps = [
             self.served_bits_by_user.get(user.ue_id, 0) / simulation_duration_seconds
             for user in center_users
@@ -193,17 +203,37 @@ class MetricsCollector:
                 "target_edge_served_bits": float(packet.served_bits),
                 "target_edge_remaining_bits": float(packet.remaining_bits),
             }
+        target_edge_total_bits = float(target_summary["target_edge_served_bits"])
+        center_agg_rate_bps = center_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
+        edge_agg_rate_bps = edge_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
+        target_edge_rate_bps = target_edge_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
+        system_agg_rate_bps = system_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
         return {
             "avg_delay_ms": statistics.mean(delays),
             "p95_delay_ms": self._percentile(delays, 0.95),
             "p99_delay_ms": self._percentile(delays, 0.99),
             "simulation_duration_ms": float(simulation_duration_ms),
+            "analysis_window_ms": float(simulation_duration_ms),
             "pdb_violation_rate": len(violations) / len(self.completed_packets) if self.completed_packets else 0.0,
             "throughput_bits": sum(item["bits_sent"] for item in self.completed_packets),
             "served_bits": self.served_bits_total,
             "center_served_bits": self.served_bits_by_group["center"],
             "edge_served_bits": self.served_bits_by_group["edge"],
             "prb_utilization": total_prb_used / total_prb_available if total_prb_available else 0.0,
+            "center_total_bits": center_total_bits,
+            "edge_total_bits": edge_total_bits,
+            "target_edge_total_bits": target_edge_total_bits,
+            "system_total_bits": system_total_bits,
+            "center_agg_rate_bps": center_agg_rate_bps,
+            "edge_agg_rate_bps": edge_agg_rate_bps,
+            "target_edge_rate_bps": target_edge_rate_bps,
+            "system_agg_rate_bps": system_agg_rate_bps,
+            "center_used_prb": center_used_prb,
+            "edge_used_prb": edge_used_prb,
+            "center_prb_share": (center_used_prb / total_prb_used) if total_prb_used else 0.0,
+            "edge_prb_share": (edge_used_prb / total_prb_used) if total_prb_used else 0.0,
+            "center_bits_per_used_prb": (center_total_bits / center_used_prb) if center_used_prb > 0 else 0.0,
+            "edge_bits_per_used_prb": (edge_total_bits / edge_used_prb) if edge_used_prb > 0 else 0.0,
             "completed_packets": len(self.completed_packets),
             "center_completed_packets": len(center_packets),
             "edge_completed_packets": len(edge_packets),

@@ -7,12 +7,13 @@ from typing import Any
 
 from scheduling_sim.config import load_config
 from scheduling_sim.metrics import MetricsCollector
+from scheduling_sim.report_rows import build_common_summary_row
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
 SummaryValue = float | int | bool
 Summary = dict[str, SummaryValue]
-RowValue = float | int | str | bool
+RowValue = float | int | str | bool | None
 Row = dict[str, RowValue]
 
 CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB = 400
@@ -38,6 +39,36 @@ def _granularity_value(packet_bits: int, period_slots: int) -> str:
 def _parse_granularity_value(value: str) -> tuple[int, int]:
     packet_bits_text, period_slots_text = value.split("_per_")
     return int(packet_bits_text), int(period_slots_text)
+
+
+def _config_metadata(config) -> dict[str, int | None]:
+    return {
+        "total_prb_per_u_slot": int(config.resources.total_prb_per_u_slot),
+        "center_pdb_ms": config.traffic.center.pdb_ms,
+        "edge_per_u_slot_prb_cap": config.radio.edge.edge_per_u_slot_prb_cap,
+    }
+
+
+def _payload_section(payload: dict[str, Any], name: str) -> dict[str, Any]:
+    section = payload.get(name, {})
+    return section if isinstance(section, dict) else {}
+
+
+def _payload_metadata(payload: dict[str, Any]) -> dict[str, int | None]:
+    resources = _payload_section(payload, "resources")
+    traffic = _payload_section(payload, "traffic")
+    center = traffic.get("center", {}) if isinstance(traffic.get("center", {}), dict) else {}
+    radio = _payload_section(payload, "radio")
+    edge_radio = radio.get("edge", {}) if isinstance(radio.get("edge", {}), dict) else {}
+    return {
+        "total_prb_per_u_slot": int(resources.get("total_prb_per_u_slot", 0)),
+        "center_pdb_ms": center.get("pdb_ms"),
+        "edge_per_u_slot_prb_cap": edge_radio.get("edge_per_u_slot_prb_cap"),
+    }
+
+
+def _pdb_label(value: int | None) -> str:
+    return "null" if value is None else f"{int(value)} ms"
 
 
 def _case_config(config, *, edge_packet_kb: int, dimension: str, value: int | str, policy: str):
@@ -72,6 +103,18 @@ def _case_config(config, *, edge_packet_kb: int, dimension: str, value: int | st
                 ),
             ),
         )
+    if dimension == "center_packet_load_per_6_slots":
+        return replace(
+            updated,
+            traffic=replace(
+                updated.traffic,
+                center=replace(
+                    updated.traffic.center,
+                    packet_bits=int(value),
+                    period_slots=6,
+                ),
+            ),
+        )
     raise ValueError(f"unsupported dimension: {dimension}")
 
 
@@ -82,6 +125,7 @@ def _build_row(
     value: int | str,
     policy: str,
     summary: Summary,
+    config_metadata: dict[str, int | None],
 ) -> Row:
     return {
         "edge_packet_kb": edge_packet_kb,
@@ -89,17 +133,8 @@ def _build_row(
         "dimension": dimension,
         "value": value,
         "policy": policy,
-        "target_edge_finished": bool(summary["target_edge_finished"]),
-        "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
-        "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
-        "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
-        "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
-        "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
-        "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
-        "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
-        "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
-        "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
-        "center_avg_rate_bps": summary["center_avg_rate_bps"],
+        **config_metadata,
+        **build_common_summary_row(summary),
     }
 
 
@@ -109,15 +144,14 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
     for edge_packet_kb in sweep_spec.get("edge_packet_kb", []):
         for edge_pdb_ms in sweep_spec.get("edge_pdb_ms", []):
             for policy in policies:
-                summary = _run_summary(
-                    _case_config(
-                        config,
-                        edge_packet_kb=int(edge_packet_kb),
-                        dimension="edge_pdb_ms",
-                        value=int(edge_pdb_ms),
-                        policy=policy,
-                    )
+                case_config = _case_config(
+                    config,
+                    edge_packet_kb=int(edge_packet_kb),
+                    dimension="edge_pdb_ms",
+                    value=int(edge_pdb_ms),
+                    policy=policy,
                 )
+                summary = _run_summary(case_config)
                 rows.append(
                     _build_row(
                         edge_packet_kb=int(edge_packet_kb),
@@ -125,19 +159,19 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
                         value=int(edge_pdb_ms),
                         policy=policy,
                         summary=summary,
+                        config_metadata=_config_metadata(case_config),
                     )
                 )
         for center_user_count in sweep_spec.get("center_user_count", []):
             for policy in policies:
-                summary = _run_summary(
-                    _case_config(
-                        config,
-                        edge_packet_kb=int(edge_packet_kb),
-                        dimension="center_user_count",
-                        value=int(center_user_count),
-                        policy=policy,
-                    )
+                case_config = _case_config(
+                    config,
+                    edge_packet_kb=int(edge_packet_kb),
+                    dimension="center_user_count",
+                    value=int(center_user_count),
+                    policy=policy,
                 )
+                summary = _run_summary(case_config)
                 rows.append(
                     _build_row(
                         edge_packet_kb=int(edge_packet_kb),
@@ -145,6 +179,7 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
                         value=int(center_user_count),
                         policy=policy,
                         summary=summary,
+                        config_metadata=_config_metadata(case_config),
                     )
                 )
         if int(edge_packet_kb) == CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB:
@@ -154,15 +189,14 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
                     int(item["period_slots"]),
                 )
                 for policy in policies:
-                    summary = _run_summary(
-                        _case_config(
-                            config,
-                            edge_packet_kb=int(edge_packet_kb),
-                            dimension="center_packet_granularity",
-                            value=value,
-                            policy=policy,
-                        )
+                    case_config = _case_config(
+                        config,
+                        edge_packet_kb=int(edge_packet_kb),
+                        dimension="center_packet_granularity",
+                        value=value,
+                        policy=policy,
                     )
+                    summary = _run_summary(case_config)
                     rows.append(
                         _build_row(
                             edge_packet_kb=int(edge_packet_kb),
@@ -170,6 +204,27 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[Row]:
                             value=value,
                             policy=policy,
                             summary=summary,
+                            config_metadata=_config_metadata(case_config),
+                        )
+                    )
+            for center_packet_bits in sweep_spec.get("center_packet_load_per_6_slots", []):
+                for policy in policies:
+                    case_config = _case_config(
+                        config,
+                        edge_packet_kb=int(edge_packet_kb),
+                        dimension="center_packet_load_per_6_slots",
+                        value=int(center_packet_bits),
+                        policy=policy,
+                    )
+                    summary = _run_summary(case_config)
+                    rows.append(
+                        _build_row(
+                            edge_packet_kb=int(edge_packet_kb),
+                            dimension="center_packet_load_per_6_slots",
+                            value=int(center_packet_bits),
+                            policy=policy,
+                            summary=summary,
+                            config_metadata=_config_metadata(case_config),
                         )
                     )
     return rows
@@ -192,6 +247,8 @@ def _value_label(dimension: str, value: int | str) -> str:
         packet_bits, period_slots = _parse_granularity_value(str(value))
         slot_label = "slot" if period_slots == 1 else "slots"
         return f"{packet_bits} bit / every {period_slots} {slot_label}"
+    if dimension == "center_packet_load_per_6_slots":
+        return f"{value} bit / every 6 slots"
     raise ValueError(f"unsupported dimension: {dimension}")
 
 
@@ -217,10 +274,68 @@ def _format_delta(baseline: Row, ours: Row) -> str:
     return "both unfinished"
 
 
+def _format_prb_utilization(row: Row) -> str:
+    return f"{float(row['prb_utilization']) * 100.0:.1f}%"
+
+
+def _build_load_trend_analysis(rows: list[Row]) -> list[str]:
+    sorted_values = sorted(int(row["value"]) for row in rows if row["policy"] == "business_aware_constrained_insert")
+    ours_by_value = {
+        int(row["value"]): row for row in rows if row["policy"] == "business_aware_constrained_insert"
+    }
+    baseline_by_value = {
+        int(row["value"]): row for row in rows if row["policy"] == "tail_append"
+    }
+    pivot_value = next(
+        (
+            value
+            for value in sorted_values
+            if float(ours_by_value[value]["prb_utilization"]) >= 0.95
+        ),
+        sorted_values[-1],
+    )
+    pivot_row = ours_by_value[pivot_value]
+    pivot_completion = float(pivot_row["target_edge_completion_delay_ms"])
+    post_pivot_rise_value = next(
+        (
+            value
+            for value in sorted_values
+            if value > pivot_value
+            and float(ours_by_value[value]["target_edge_completion_delay_ms"]) > pivot_completion
+        ),
+        sorted_values[-1],
+    )
+    post_pivot_rise_row = ours_by_value[post_pivot_rise_value]
+    extreme_value = sorted_values[-1]
+    extreme_ours = ours_by_value[extreme_value]
+    extreme_baseline = baseline_by_value[extreme_value]
+    return [
+        "### 中心业务负载趋势分析",
+        (
+            f"- 以 `Ours PRB Util` 看，`{pivot_value} bit / every 6 slots` 可视为接近饱和的拐点"
+            f"（`{_format_prb_utilization(pivot_row)}`）；在这之前，继续增大中心包主要体现为资源利用率持续上升。"
+        ),
+        (
+            f"- 过了这个拐点后，再继续增大中心负载，目标边缘包完成时延不再继续改善；"
+            f"例如 `Ours Completion` 在 `{post_pivot_rise_value} bit / every 6 slots` 时升到 "
+            f"`{float(post_pivot_rise_row['target_edge_completion_delay_ms']):.0f} ms`，"
+            "说明系统开始进入高占用下的拥塞区。"
+        ),
+        (
+            f"- 极端档位 `16000 bit / every 6 slots` 下，Baseline / Ours 的 `PRB Util` 分别为 "
+            f"`{_format_prb_utilization(extreme_baseline)}` / `{_format_prb_utilization(extreme_ours)}`，"
+            f"对应完成时延为 `{_format_completion(extreme_baseline)}` / `{_format_completion(extreme_ours)}`，"
+            "可作为接近满载时的参考点。"
+        ),
+        "- `Center Avg Rate` 仍按目标边缘包完成前的停止窗口统计，跨策略比较时需要结合完成时间一起解读。",
+        "",
+    ]
+
+
 def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
     lines = [
-        "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | 结论 |",
-        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | --- |",
+        "| 参数值 | Baseline Completion | Ours Completion | Baseline Queue Wait | Ours Queue Wait | Baseline Service | Ours Service | Baseline PDB | Ours PDB | Baseline Center Avg | Ours Center Avg | Baseline PRB Util | Ours PRB Util | 结论 |",
+        "| --- | --- | --- | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | --- |",
     ]
     if dimension == "center_packet_granularity":
         values = sorted(
@@ -265,6 +380,8 @@ def _build_table(rows: list[Row], *, dimension: str) -> list[str]:
             f"`{bool(ours['target_edge_pdb_met'])}` | "
             f"`{float(baseline['center_avg_rate_bps']):.0f} bps` | "
             f"`{float(ours['center_avg_rate_bps']):.0f} bps` | "
+            f"`{_format_prb_utilization(baseline)}` | "
+            f"`{_format_prb_utilization(ours)}` | "
             f"{_format_delta(baseline, ours)} |"
         )
     return lines
@@ -274,7 +391,7 @@ def _packet_size_heading(edge_packet_kb: int) -> str:
     return f"## `{edge_packet_kb} KB` 目标边缘大包场景"
 
 
-def _build_packet_size_section(edge_packet_kb: int, rows: list[Row]) -> str:
+def _build_packet_size_section(edge_packet_kb: int, rows: list[Row], *, metadata: dict[str, int | None]) -> str:
     pdb_rows = _rows_for(rows, edge_packet_kb=edge_packet_kb, dimension="edge_pdb_ms")
     center_rows = _rows_for(rows, edge_packet_kb=edge_packet_kb, dimension="center_user_count")
     granularity_rows = _rows_for(
@@ -282,11 +399,17 @@ def _build_packet_size_section(edge_packet_kb: int, rows: list[Row]) -> str:
         edge_packet_kb=edge_packet_kb,
         dimension="center_packet_granularity",
     )
+    load_rows = _rows_for(
+        rows,
+        edge_packet_kb=edge_packet_kb,
+        dimension="center_packet_load_per_6_slots",
+    )
     lines = [
         _packet_size_heading(edge_packet_kb),
         "",
         f"- 固定 `edge_packet_kb = {edge_packet_kb}`",
-        "- 固定 `edge_per_u_slot_prb_cap = 237`",
+        f"- 固定 `edge_per_u_slot_prb_cap = {metadata['edge_per_u_slot_prb_cap']}`",
+        f"- 中心用户 `pdb_ms = {_pdb_label(metadata['center_pdb_ms'])}`",
         "",
         "### PDB 扫描",
         "- 固定 `center_user_count = 63`",
@@ -322,6 +445,20 @@ def _build_packet_size_section(edge_packet_kb: int, rows: list[Row]) -> str:
                 "",
             ]
         )
+    if edge_packet_kb == CENTER_PACKET_GRANULARITY_EDGE_PACKET_KB and load_rows:
+        lines.extend(
+            [
+                "### 中心业务负载扫描（固定 every 6 slots）",
+                "- 固定 `edge_pdb_ms = 500`",
+                "- 固定 `center_user_count = 63`",
+                "- 固定 `center period_slots = 6`",
+                "- 这里只增大中心 `packet_bits`，因此总 offered load 增大；重点观察中心背景总 bit 数上升是否拉长边缘大包完成时延。",
+                "",
+                *_build_table(load_rows, dimension="center_packet_load_per_6_slots"),
+                "",
+                *_build_load_trend_analysis(load_rows),
+            ]
+        )
     lines.extend(
         [
             "### 小结",
@@ -332,15 +469,22 @@ def _build_packet_size_section(edge_packet_kb: int, rows: list[Row]) -> str:
 
 
 def _write_markdown_report(payload: dict[str, Any], output_dir: Path, rows: list[Row]) -> None:
+    edge_packet_kb_values = [int(value) for value in payload.get("sweep", {}).get("edge_packet_kb", [])]
+    edge_packet_kb_text = " / ".join(str(value) for value in edge_packet_kb_values)
+    metadata = _payload_metadata(payload)
     sections = [
         "# Target Edge 大包规模敏感性测试报告",
         "",
         "## 场景设置",
         "",
         "- TDD：`DSUUU`，每 slot `1 ms`，目标包发完即停；最大 `1000` 个周期作为安全上限（`5000 ms`）",
-        "- 调度资源：每个 U-slot `237 PRB`，边缘目标用户固定 `edge_per_u_slot_prb_cap = 237`，即边缘无额外 cap 限制",
+        (
+            f"- 调度资源：每个 U-slot `{metadata['total_prb_per_u_slot']} PRB`，"
+            f"边缘目标用户固定 `edge_per_u_slot_prb_cap = {metadata['edge_per_u_slot_prb_cap']}`"
+        ),
+        f"- 中心业务配置：中心用户 `pdb_ms = {_pdb_label(metadata['center_pdb_ms'])}`",
         "- 对比策略：`tail_append` 与 `business_aware_constrained_insert`",
-        "- 扫描维度：`400 / 800 / 1200 / 1600 / 2000 KB`，每档下再扫描 `PDB` 与中心用户数",
+        f"- 扫描维度：`{edge_packet_kb_text} KB`，每档下再扫描 `PDB`、中心用户数、中心业务颗粒度与固定周期中心负载",
         "",
         "## 指标说明",
         "",
@@ -348,10 +492,11 @@ def _write_markdown_report(payload: dict[str, Any], output_dir: Path, rows: list
         "- `Queue Wait`：目标包总时延中未真正传 bit 的累计等待时间",
         "- `Service Time`：目标包实际占用的 `U` slot 数量 × `1 ms`",
         "- `Center Avg Rate`：目标包完成前中心背景用户的平均吞吐",
+        "- `PRB Utilization`：系统在当前统计窗口内的 `total_prb_used / total_prb_available`",
         "",
     ]
     for edge_packet_kb in payload.get("sweep", {}).get("edge_packet_kb", []):
-        sections.extend([_build_packet_size_section(int(edge_packet_kb), rows), ""])
+        sections.extend([_build_packet_size_section(int(edge_packet_kb), rows, metadata=metadata), ""])
     sections.extend(
         [
             "## 跨包大小趋势总结",
@@ -368,6 +513,10 @@ def _write_markdown_report(payload: dict[str, Any], output_dir: Path, rows: list
     (output_dir / "sensitivity_report.md").write_text("\n".join(sections), encoding="utf-8")
 
 
+def _csv_row(row: Row) -> Row:
+    return {key: ("null" if value is None else value) for key, value in row.items()}
+
+
 def _write_outputs(output_dir: Path, rows: list[Row]) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     fieldnames = list(rows[0].keys()) if rows else []
@@ -376,7 +525,7 @@ def _write_outputs(output_dir: Path, rows: list[Row]) -> None:
     with csv_path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
-        writer.writerows(rows)
+        writer.writerows(_csv_row(row) for row in rows)
     json_path.write_text(json.dumps(rows, indent=2), encoding="utf-8")
     stdout_fieldnames = ["scope", "edge_packet_kb", "dimension", "value", "policy"]
     stdout_writer = csv.DictWriter(sys.stdout, fieldnames=stdout_fieldnames)

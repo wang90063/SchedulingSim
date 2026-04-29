@@ -9,7 +9,7 @@
   },
   "resources": { "total_prb_per_u_slot": 237, "max_ue_per_slot": 16 },
   "traffic": {
-    "center": { "count": 63, "period_slots": 1, "packet_bits": 160, "pdb_ms": 1000000000, "gbr_bps": 7000 },
+    "center": { "count": 63, "period_slots": 6, "packet_bits": 960, "pdb_ms": null, "gbr_bps": 7000 },
     "edge": { "count": 1, "packet_bits": 3200000, "pdb_ms": 500 }
   },
   "radio": {
@@ -30,19 +30,11 @@
     "edge": { "edge_per_u_slot_prb_cap": 237 }
   },
   "scheduler": { "ranking": "epf", "reinsert_policy": "business_aware_constrained_insert" },
-  "report": { "output_dir": "outputs/target_edge_packet_size_sensitivity_main_uncapped", "keep_slot_trace": false },
-  "sweep": {
-    "policies": ["tail_append", "business_aware_constrained_insert"],
-    "edge_packet_kb": [400, 800, 1200, 1600, 2000],
-    "edge_pdb_ms": [100, 150, 200, 300, 400, 500],
-    "center_packet_granularity": [
-      { "packet_bits": 160, "period_slots": 1 },
-      { "packet_bits": 320, "period_slots": 2 },
-      { "packet_bits": 480, "period_slots": 3 },
-      { "packet_bits": 800, "period_slots": 5 },
-      { "packet_bits": 960, "period_slots": 6 }
-    ],
-    "center_packet_load_per_6_slots": [960, 1200, 1600, 2400, 3200, 4000, 4800, 6400, 8000, 12000, 16000],
-    "center_user_count": [16, 23, 31, 47, 63, 79]
+  "report": {
+    "output_dir": "outputs/center_pdb_null_rerun_20260417_184119/target_edge_pdb_dominance_diagnostic",
+    "keep_slot_trace": false
+  },
+  "diagnostic": {
+    "policies": ["tail_append", "business_aware_constrained_insert"]
   }
 }

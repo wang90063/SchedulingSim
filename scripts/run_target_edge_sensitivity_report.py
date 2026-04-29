@@ -7,6 +7,7 @@ from typing import Any
 
 from scheduling_sim.config import load_config
 from scheduling_sim.metrics import MetricsCollector
+from scheduling_sim.report_rows import build_common_summary_row
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
@@ -73,17 +74,7 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[dict[str, float | 
                         "dimension": dimension,
                         "value": int(value),
                         "policy": policy,
-                        "target_edge_finished": bool(summary["target_edge_finished"]),
-                        "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
-                        "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
-                        "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
-                        "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
-                        "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
-                        "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
-                        "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
-                        "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
-                        "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
-                        "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                        **build_common_summary_row(summary),
                         "context": "default",
                     }
                 )
@@ -107,17 +98,7 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[dict[str, float | 
                             "dimension": dimension,
                             "value": int(value),
                             "policy": policy,
-                            "target_edge_finished": bool(summary["target_edge_finished"]),
-                            "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
-                            "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
-                            "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
-                            "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
-                            "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
-                            "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
-                            "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
-                            "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
-                            "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
-                            "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                            **build_common_summary_row(summary),
                             "context": context,
                         }
                     )
@@ -131,17 +112,7 @@ def _collect_rows(config, sweep_spec: dict[str, Any]) -> list[dict[str, float | 
                         "dimension": "center_user_count",
                         "value": int(value),
                         "policy": policy,
-                        "target_edge_finished": bool(summary["target_edge_finished"]),
-                        "target_edge_completion_delay_ms": summary["target_edge_completion_delay_ms"],
-                        "target_edge_queue_wait_ms": summary["target_edge_queue_wait_ms"],
-                        "target_edge_service_time_ms": summary["target_edge_service_time_ms"],
-                        "target_edge_control_phase_wait_ms": summary["target_edge_control_phase_wait_ms"],
-                        "target_edge_pre_first_service_wait_ms": summary["target_edge_pre_first_service_wait_ms"],
-                        "target_edge_inter_service_gap_wait_ms": summary["target_edge_inter_service_gap_wait_ms"],
-                        "target_edge_time_to_first_service_ms": summary["target_edge_time_to_first_service_ms"],
-                        "target_edge_pdb_met": bool(summary["target_edge_pdb_met"]),
-                        "target_edge_remaining_bits": summary["target_edge_remaining_bits"],
-                        "center_avg_rate_bps": summary["center_avg_rate_bps"],
+                        **build_common_summary_row(summary),
                         "context": _fine_center_context(),
                     }
                 )
@@ -815,7 +786,12 @@ def _build_report(payload: dict[str, Any], rows: list[dict[str, float | int | st
             f"- 调度资源：每个 U-slot `{resources['total_prb_per_u_slot']} PRB`，每次 `D/S` 从链表前 `{resources['max_ue_per_slot']}` 个 UE 中做 EPF 排序和顺序分配",
             f"- 目标业务：`1` 个边缘目标 UE，固定 `{traffic['edge']['packet_bits']} bit` 大包，上行传输",
             f"- 背景业务：中心用户周期小包，默认 `{traffic['center']['count']}` 个中心用户，`{traffic['center']['packet_bits']} bit/slot`",
-            f"- 业务感知口径：中心背景 `PDB = {traffic['center']['pdb_ms']} ms`，可视为“天然队尾”；边缘目标基线 `PDB = {traffic['edge']['pdb_ms']} ms`",
+            (
+                "- 业务感知口径：中心背景关闭 `PDB` 权重（`pdb_ms = null`）；"
+                f"边缘目标基线 `PDB = {traffic['edge']['pdb_ms']} ms`"
+                if traffic["center"]["pdb_ms"] is None
+                else f"- 业务感知口径：中心背景 `PDB = {traffic['center']['pdb_ms']} ms`，可视为“天然队尾”；边缘目标基线 `PDB = {traffic['edge']['pdb_ms']} ms`"
+            ),
             *guard_lines,
             f"- 无线环境：`UMa`，小区半径 `{env['cell_radius_m']} m`，中心距离 `{env['center_distance_range_m']}`，边缘距离 `{env['edge_distance_range_m']}`",
             f"- 边缘 PRB 上限：默认 `edge_per_u_slot_prb_cap = {radio['edge']['edge_per_u_slot_prb_cap']}`，仅对边缘 UE 生效",

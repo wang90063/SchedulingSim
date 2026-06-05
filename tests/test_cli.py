@@ -641,6 +641,99 @@ class CliSmokeTests(unittest.TestCase):
         self.assertIn("center_bits_per_used_prb", rows_text)
         self.assertIn("edge_bits_per_used_prb", rows_text)
 
+    def test_edge_ratio_sinr_snapshot_script_runs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [
+                "python",
+                "scripts/render_edge_ratio_sinr_snapshot.py",
+                "outputs/edge_ratio_random_pdb_32users_packet_sweep_avg10_20260423_190938",
+            ],
+            cwd=repo_root,
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, msg=result.stderr)
+        self.assertIn("sinr_snapshot_report.md", result.stdout)
+
+    def test_edge_ratio_packet_sweep_report_script_runs_on_small_random_fixture(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "edge_ratio_random_small.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "simulation": {
+                            "cycles": 20,
+                            "slot_duration_ms": 1,
+                            "tdd_pattern": "DSUUU",
+                            "random_seed": 7,
+                            "stop_when_target_edge_finished": True,
+                            "deadline_guard_ms": 10,
+                        },
+                        "resources": {"total_prb_per_u_slot": 273, "max_ue_per_slot": 16},
+                        "traffic": {
+                            "center": {
+                                "count": 29,
+                                "period_slots": 6,
+                                "packet_bits": 960,
+                                "pdb_ms": None,
+                                "gbr_bps": 7000,
+                            },
+                            "edge": {"count": 3, "packet_bits": 80000, "pdb_ms": 800},
+                        },
+                        "radio": {
+                            "environment": {
+                                "scenario_type": "uma",
+                                "cell_radius_m": 500,
+                                "carrier_frequency_ghz": 3.5,
+                                "noise_figure_db": 7.0,
+                                "interference_margin_db": 3.0,
+                                "shadow_std_db": 4.0,
+                                "slow_fading_alpha": 0.95,
+                                "slot_jitter_std_db": 0.5,
+                                "center_distance_range_m": [50, 150],
+                                "edge_distance_range_m": [375, 475],
+                                "mcs_table": [
+                                    {"sinr_db": -7.0, "mcs_index": 1, "bits_per_prb": 27},
+                                    {"sinr_db": 4.0, "mcs_index": 6, "bits_per_prb": 212},
+                                ],
+                            },
+                            "center": {},
+                            "edge": {"edge_per_u_slot_prb_cap": 273},
+                        },
+                        "scheduler": {"ranking": "epf", "reinsert_policy": "business_aware_constrained_insert"},
+                        "report": {"output_dir": str(Path(tmp) / "edge-ratio-random"), "keep_slot_trace": False},
+                        "edge_ratio_sweep": {
+                            "total_users": 32,
+                            "requested_edge_ratio_pct": [10],
+                            "repeat_count": 1,
+                            "pdb_mode": "random",
+                            "pdb_choices": [None, 200, 400],
+                            "pdb_packet_kb_values": [10, 200],
+                            "non_pdb_packet_bits": 960,
+                            "non_pdb_period_slots": 6,
+                            "policies": ["tail_append", "business_aware_constrained_insert"],
+                            "random_seed_base": 7,
+                            "reference_config": "outputs/center_pdb_null_rerun_prb273_20260421_000000/target_edge_packet_size_sensitivity_400kb/config_rerun.json",
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python", "scripts/run_edge_ratio_packet_sweep_report.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertIn("summary_report.md", result.stdout)
+
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp_dir:

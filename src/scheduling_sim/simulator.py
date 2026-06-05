@@ -27,6 +27,7 @@ class UlSimulator:
         reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
         if self.wireless_env is not None and reset_users and hasattr(self.wireless_env, "reset"):
             self.wireless_env.reset(reset_users)
+        self._record_radio_states(self.users)
         self._cycle_served_bits_by_ue = {user.ue_id: 0 for user in self.users}
 
     def _build_wireless_env(self):
@@ -118,11 +119,18 @@ class UlSimulator:
     def collect_candidates(self, phase: str):
         return self.queue.peek_head_k(self.config.resources.max_ue_per_slot)
 
+    def _record_radio_states(self, users: list[UserEquipment]) -> None:
+        if not hasattr(self.metrics, "record_radio_state"):
+            return
+        for user in users:
+            self.metrics.record_radio_state(user)
+
     def finish_phase(self, phase: str, now_ms: int = 0, slot_index: int = 0):
         if self.wireless_env is not None and phase in {"D", "S"}:
             refresh_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
             if refresh_users:
                 self.wireless_env.refresh_slot(refresh_users, slot_index=slot_index, slot_name=phase)
+                self._record_radio_states(refresh_users)
         candidates = self.collect_candidates(phase)
         ranked = self.ranking.rank(candidates)
         if self.diagnostic_collector is not None:

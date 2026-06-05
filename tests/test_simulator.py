@@ -164,6 +164,22 @@ class RadioSnapshotWirelessEnv:
             )
 
 
+class RefreshOnlyWirelessEnv:
+    def __init__(self) -> None:
+        self.calls: list[tuple[int, str]] = []
+
+    def refresh_slot(self, users, slot_index: int, slot_name: str) -> None:
+        self.calls.append((slot_index, slot_name))
+        for user in users:
+            current = user.current_radio_state
+            user.current_radio_state = CurrentRadioState(
+                snr_db=6.0 if slot_name == "D" else 8.0,
+                mcs_index=2 if slot_name == "D" else 3,
+                bits_per_prb=12 if slot_name == "D" else 14,
+                per_u_slot_prb_cap=None if current is None else current.per_u_slot_prb_cap,
+            )
+
+
 class RecordingPlanner:
     def __init__(self) -> None:
         self.bits_per_prb_by_phase: dict[str, int] = {}
@@ -358,6 +374,34 @@ class SimulatorCycleTests(unittest.TestCase):
         self.assertEqual(rows[0]["sinr_mean_db"], 6.0)
         self.assertEqual(rows[0]["sinr_min_db"], 4.0)
         self.assertEqual(rows[0]["sinr_max_db"], 8.0)
+
+    def test_run_does_not_record_initial_radio_snapshot_without_reset(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=6, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=960, pdb_ms=None),
+                edge=TrafficConfig(count=1, packet_bits=80000, pdb_ms=400),
+            ),
+            radio=RadioSection(
+                center=RadioClassConfig(base_snr_db=16.0, snr_min_db=10.0, snr_max_db=22.0),
+                edge=RadioClassConfig(base_snr_db=4.0, snr_min_db=-5.0, snr_max_db=10.0, edge_per_u_slot_prb_cap=6),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        collector = MetricsCollector()
+        simulator = UlSimulator(config, users, collector, wireless_env=RefreshOnlyWirelessEnv())
+
+        simulator.run()
+        stats = collector.radio_stats_by_user[users[0].ue_id]
+        rows = collector.build_user_radio_rows(users)
+
+        self.assertEqual(stats["sinr_count"], 2)
+        self.assertEqual(stats["sinr_sum_db"], 14.0)
+        self.assertEqual(rows[0]["initial_sinr_db"], 6.0)
+        self.assertEqual(rows[0]["sinr_mean_db"], 7.0)
 
     def test_execute_u_slot_caps_merged_edge_prbs_at_physical_slot(self) -> None:
         config = AppConfig(
@@ -642,6 +686,20 @@ class MetricsTests(unittest.TestCase):
             ),
             hol_ms=hol_ms,
         )
+
+    def test_build_user_radio_rows_omits_users_without_recorded_snapshots(self) -> None:
+        collector = MetricsCollector()
+        user = self._make_user("edge-0", is_edge_user=True)
+        user.current_radio_state = CurrentRadioState(
+            snr_db=4.0,
+            mcs_index=1,
+            bits_per_prb=10,
+            per_u_slot_prb_cap=6,
+        )
+
+        rows = collector.build_user_radio_rows([user])
+
+        self.assertEqual(rows, [])
 
     def test_metrics_report_contains_pdb_and_throughput_keys(self) -> None:
         collector = MetricsCollector()

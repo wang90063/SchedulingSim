@@ -27,7 +27,7 @@ class UlSimulator:
         reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()
         if self.wireless_env is not None and reset_users and hasattr(self.wireless_env, "reset"):
             self.wireless_env.reset(reset_users)
-        self._record_radio_states(self.users)
+            self._record_radio_states(reset_users)
         self._cycle_served_bits_by_ue = {user.ue_id: 0 for user in self.users}
 
     def _build_wireless_env(self):

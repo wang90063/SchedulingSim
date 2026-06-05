@@ -50,34 +50,21 @@ class MetricsCollector:
         rows: list[dict[str, float | int | str]] = []
         for user in users:
             stats = self.radio_stats_by_user.get(user.ue_id)
-            state = getattr(user, "current_radio_state", None)
-            if stats is None and state is None:
+            if stats is None:
                 continue
-            resolved = stats or {
-                "ue_id": user.ue_id,
-                "user_class": "edge" if user.is_edge_user else "center",
-                "distance_to_bs_m": float(getattr(user.radio_profile, "distance_to_bs_m", 0.0)),
-                "initial_sinr_db": 0.0 if state is None else float(state.snr_db),
-                "initial_mcs_index": 0 if state is None else int(state.mcs_index),
-                "initial_bits_per_prb": 0 if state is None else int(state.bits_per_prb),
-                "sinr_sum_db": 0.0 if state is None else float(state.snr_db),
-                "sinr_count": 0 if state is None else 1,
-                "sinr_min_db": 0.0 if state is None else float(state.snr_db),
-                "sinr_max_db": 0.0 if state is None else float(state.snr_db),
-            }
-            sinr_count = int(resolved["sinr_count"])
-            sinr_mean = 0.0 if sinr_count == 0 else float(resolved["sinr_sum_db"]) / float(sinr_count)
+            sinr_count = int(stats["sinr_count"])
+            sinr_mean = 0.0 if sinr_count == 0 else float(stats["sinr_sum_db"]) / float(sinr_count)
             rows.append(
                 {
-                    "ue_id": str(resolved["ue_id"]),
-                    "user_class": str(resolved["user_class"]),
-                    "distance_to_bs_m": float(resolved["distance_to_bs_m"]),
-                    "initial_sinr_db": float(resolved["initial_sinr_db"]),
+                    "ue_id": str(stats["ue_id"]),
+                    "user_class": str(stats["user_class"]),
+                    "distance_to_bs_m": float(stats["distance_to_bs_m"]),
+                    "initial_sinr_db": float(stats["initial_sinr_db"]),
                     "sinr_mean_db": sinr_mean,
-                    "sinr_min_db": float(resolved["sinr_min_db"]),
-                    "sinr_max_db": float(resolved["sinr_max_db"]),
-                    "initial_mcs_index": int(resolved["initial_mcs_index"]),
-                    "initial_bits_per_prb": int(resolved["initial_bits_per_prb"]),
+                    "sinr_min_db": float(stats["sinr_min_db"]),
+                    "sinr_max_db": float(stats["sinr_max_db"]),
+                    "initial_mcs_index": int(stats["initial_mcs_index"]),
+                    "initial_bits_per_prb": int(stats["initial_bits_per_prb"]),
                 }
             )
         return rows

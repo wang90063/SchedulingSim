@@ -1,0 +1,68 @@
+{
+  "simulation": {
+    "cycles": 1000,
+    "slot_duration_ms": 1,
+    "tdd_pattern": "DSUUU",
+    "random_seed": 7,
+    "stop_when_target_edge_finished": true,
+    "deadline_guard_ms": 10
+  },
+  "resources": {
+    "total_prb_per_u_slot": 273,
+    "max_ue_per_slot": 16
+  },
+  "traffic": {
+    "center": {
+      "count": 29,
+      "period_slots": 6,
+      "packet_bits": 960,
+      "pdb_ms": null,
+      "gbr_bps": 7000
+    },
+    "edge": {
+      "count": 3,
+      "packet_bits": 80000,
+      "pdb_ms": 800
+    }
+  },
+  "radio": {
+    "environment": {
+      "scenario_type": "uma",
+      "cell_radius_m": 500,
+      "carrier_frequency_ghz": 3.5,
+      "noise_figure_db": 7.0,
+      "interference_margin_db": 3.0,
+      "shadow_std_db": 4.0,
+      "slow_fading_alpha": 0.95,
+      "slot_jitter_std_db": 0.5,
+      "center_distance_range_m": [50, 150],
+      "edge_distance_range_m": [375, 475],
+      "mcs_table_path": "mcs/nr_ul_main.json"
+    },
+    "center": {},
+    "edge": {
+      "edge_per_u_slot_prb_cap": 273
+    }
+  },
+  "scheduler": {
+    "ranking": "epf",
+    "reinsert_policy": "business_aware_constrained_insert"
+  },
+  "report": {
+    "output_dir": "outputs/edge_ratio_random_pdb_32users_packet_sweep_avg10",
+    "keep_slot_trace": false
+  },
+  "edge_ratio_sweep": {
+    "total_users": 32,
+    "requested_edge_ratio_pct": [10, 20, 30, 40, 50, 60, 70, 80, 90],
+    "repeat_count": 10,
+    "pdb_mode": "random",
+    "pdb_choices": [null, 200, 400, 600, 800],
+    "pdb_packet_kb_values": [10, 30, 50, 70, 90, 100, 200],
+    "non_pdb_packet_bits": 960,
+    "non_pdb_period_slots": 6,
+    "policies": ["tail_append", "business_aware_constrained_insert"],
+    "random_seed_base": 7,
+    "reference_config": "outputs/center_pdb_null_rerun_prb273_20260421_000000/target_edge_packet_size_sensitivity_400kb/config_rerun.json"
+  }
+}

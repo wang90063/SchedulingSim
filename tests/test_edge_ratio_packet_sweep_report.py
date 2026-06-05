@@ -275,7 +275,38 @@ class EdgeRatioPacketSweepReportTests(unittest.TestCase):
             output_dir = Path(tmp)
             _write_outputs(
                 output_dir=output_dir,
-                manifest={"pdb_mode": "random", "pdb_packet_kb_values": [200]},
+                manifest={
+                    "reference_config": "outputs/reference/config_rerun.json",
+                    "output_dir": str(output_dir),
+                    "total_users": 32,
+                    "requested_edge_ratio_pct": [20],
+                    "scanned_edge_user_count_rule": "nearest integer: int(total_users * ratio / 100 + 0.5)",
+                    "pdb_mode": "random",
+                    "pdb_choices": [None, 200, 400, 600, 800],
+                    "repeat_count": 1,
+                    "pdb_null_handling": "PDB=null is treated as non-PDB user and is not separated from other non-PDB users in summary metrics",
+                    "random_seed_base": 7,
+                    "policies": ["tail_append", "business_aware_constrained_insert"],
+                    "baseline_policy": "tail_append",
+                    "ours_policy": "business_aware_constrained_insert",
+                    "pdb_packet_kb_values": [200],
+                    "non_pdb_packet_bits": 960,
+                    "non_pdb_period_slots": 6,
+                    "user_report_extra_columns": [
+                        "queue_time_ms",
+                        "service_time_ms",
+                        "distance_to_bs_m",
+                        "initial_sinr_db",
+                        "sinr_mean_db",
+                        "sinr_min_db",
+                        "sinr_max_db",
+                        "initial_mcs_index",
+                        "initial_bits_per_prb",
+                    ],
+                    "per_repeat_user_report_dir": str(output_dir / "user_reports_by_repeat"),
+                    "pairing_rule": "For the same packet_kb, ratio, repeat, the identical random PDB assignment is reused across policies",
+                    "pdb_satisfaction_denominator": "PDB>0 users only; unfinished PDB users count as not met",
+                },
                 pdb_assignments={"200": {"20": {"0": {"pdb_by_ue": {"edge-0": 200}}}}},
                 raw_summaries=[
                     {
@@ -299,6 +330,31 @@ class EdgeRatioPacketSweepReportTests(unittest.TestCase):
             self.assertTrue((output_dir / "summary_gain_average.csv").exists())
             self.assertTrue((output_dir / "user_report.csv").exists())
             self.assertTrue((output_dir / "user_reports_by_repeat" / "repeat_00.csv").exists())
+            manifest = (output_dir / "experiment_manifest.json").read_text(encoding="utf-8")
+            self.assertIn('"scanned_edge_user_count_rule"', manifest)
+            self.assertIn('"pdb_null_handling"', manifest)
+            self.assertIn('"baseline_policy": "tail_append"', manifest)
+            self.assertIn('"ours_policy": "business_aware_constrained_insert"', manifest)
+            self.assertIn('"pairing_rule"', manifest)
+            self.assertIn('"queue_time_ms"', manifest)
+            self.assertIn('"distance_to_bs_m"', manifest)
+            summary_report = (output_dir / "summary_report.md").read_text(encoding="utf-8")
+            self.assertIn("Edge 占比", summary_report)
+            self.assertIn("包长 200KB", summary_report)
+            self.assertIn("请求占比", summary_report)
+            self.assertIn("Baseline PDB满足率", summary_report)
+            user_report = (output_dir / "user_report.md").read_text(encoding="utf-8")
+            self.assertIn("逐用户明细", user_report)
+            self.assertIn("pdb_setting = null", user_report)
+            self.assertIn("包长 200KB", user_report)
+            self.assertIn("请求占比 20%", user_report)
+            self.assertIn("tail_append", user_report)
+            repeat_report = (output_dir / "user_reports_by_repeat" / "repeat_00.md").read_text(encoding="utf-8")
+            self.assertIn("Repeat 00 用户明细", repeat_report)
+            self.assertIn("pdb_setting = null", repeat_report)
+            self.assertIn("包长 200KB", repeat_report)
+            self.assertIn("请求占比 20%", repeat_report)
+            self.assertIn("tail_append", repeat_report)
 
 
 if __name__ == "__main__":

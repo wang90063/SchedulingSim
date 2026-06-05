@@ -733,6 +733,20 @@ class CliSmokeTests(unittest.TestCase):
             )
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             self.assertIn("summary_report.md", result.stdout)
+            output_dir = Path(tmp) / "edge-ratio-random"
+            summary_report = (output_dir / "summary_report.md").read_text(encoding="utf-8")
+            self.assertIn("随机 PDB", summary_report)
+            self.assertIn("包长 10KB", summary_report)
+            self.assertIn("包长 200KB", summary_report)
+            self.assertIn("请求占比", summary_report)
+            user_report = (output_dir / "user_report.md").read_text(encoding="utf-8")
+            self.assertIn("pdb_setting = null", user_report)
+            self.assertIn("逐用户明细", user_report)
+            manifest_text = (output_dir / "experiment_manifest.json").read_text(encoding="utf-8")
+            self.assertIn('"scanned_edge_user_count_rule"', manifest_text)
+            self.assertIn('"pairing_rule"', manifest_text)
+            self.assertIn('"queue_time_ms"', manifest_text)
+            self.assertIn('"distance_to_bs_m"', manifest_text)
 
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

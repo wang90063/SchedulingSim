@@ -69,6 +69,8 @@ class TrafficProfile:
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
+    arrival_mode: str = "single_burst"
+    initial_phase_mode: str = "none"
 
 
 @dataclass

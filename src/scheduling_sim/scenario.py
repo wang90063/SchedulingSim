@@ -71,6 +71,8 @@ class ScenarioFactory:
                         pdb_ms=self.config.traffic.center.pdb_ms,
                         period_slots=self.config.traffic.center.period_slots,
                         gbr_bps=self.config.traffic.center.gbr_bps,
+                        arrival_mode=self.config.traffic.center.arrival_mode,
+                        initial_phase_mode=self.config.traffic.center.initial_phase_mode,
                     ),
                     current_radio_state=self._initial_radio_state(center_profile, is_edge_user=False),
                 )
@@ -93,6 +95,8 @@ class ScenarioFactory:
                         packet_bits=self.config.traffic.edge.packet_bits,
                         pdb_ms=self.config.traffic.edge.pdb_ms,
                         burst_cycle_interval=self.config.traffic.edge.burst_cycle_interval,
+                        arrival_mode=self.config.traffic.edge.arrival_mode,
+                        initial_phase_mode=self.config.traffic.edge.initial_phase_mode,
                     ),
                     current_radio_state=self._initial_radio_state(edge_profile, is_edge_user=True),
                 )

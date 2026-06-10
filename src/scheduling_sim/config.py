@@ -14,6 +14,8 @@ class TrafficConfig:
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
+    arrival_mode: str = "single_burst"
+    initial_phase_mode: str = "none"
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class SimulationConfig:
     slot_duration_ms: int
     tdd_pattern: str
     random_seed: int = 0
+    analysis_window_ms: int | None = None
     stop_when_target_edge_finished: bool = False
     deadline_guard_ms: int = 0
     avg_rate_ewma_beta: float = 0.9

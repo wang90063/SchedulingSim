@@ -317,6 +317,99 @@ class SimulatorCycleTests(unittest.TestCase):
 
         self.assertEqual(edge_user.lc.packets, [])
 
+    def test_u_slot_arrivals_inject_due_periodic_edge_packets(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=0, u_slot_index=0, now_ms=2)
+
+        self.assertEqual(len(edge_user.lc.packets), 1)
+        self.assertEqual(edge_user.lc.head_packet.arrival_time, 0)
+        self.assertEqual(edge_user.lc.head_packet.eligible_cycle, 1)
+        self.assertTrue(edge_user.lc.head_packet.is_target)
+
+    def test_u_slot_arrivals_preserve_center_periodic_injection(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=1, period_slots=2, packet_bits=30, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=0,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        center_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=0, u_slot_index=0, now_ms=2)
+
+        self.assertEqual(len(center_user.lc.packets), 1)
+        self.assertEqual(center_user.lc.head_packet.arrival_time, 0)
+        self.assertEqual(center_user.lc.head_packet.eligible_cycle, 1)
+
+    def test_u_slot_arrivals_preserve_legacy_edge_burst_injection(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=2, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    burst_cycle_interval=2,
+                    arrival_mode="single_burst",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=1, u_slot_index=0, now_ms=7)
+
+        self.assertEqual(len(edge_user.lc.packets), 1)
+        self.assertEqual(edge_user.lc.head_packet.arrival_time, 5)
+        self.assertEqual(edge_user.lc.head_packet.eligible_cycle, 2)
+        self.assertFalse(edge_user.lc.head_packet.is_target)
+
     def test_u_slot_arrival_does_not_make_existing_hol_ineligible(self) -> None:
         config = self._legacy_config(center_count=1, max_ue_per_slot=1)
         users = ScenarioFactory(config).build_users()

@@ -2,7 +2,6 @@ from scheduling_sim.models import Packet, UserEquipment
 from scheduling_sim.pdb_arrivals import (
     build_periodic_pdb_schedule,
     resolve_analysis_window_ms,
-    resolve_periodic_runtime_ms,
 )
 from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
@@ -187,12 +186,11 @@ class UlSimulator:
         total_prb_used = 0
         self._preload_initial_backlog()
         slots_per_cycle = len(self.config.simulation.tdd_pattern)
-        base_runtime_ms = (
+        simulation_duration_ms = (
             self.config.simulation.cycles
             * len(self.config.simulation.tdd_pattern)
             * self.config.simulation.slot_duration_ms
         )
-        simulation_duration_ms = resolve_periodic_runtime_ms(base_runtime_ms, self.users, self.analysis_window_ms)
         should_stop = False
         for cycle_index in range(self.config.simulation.cycles):
             self.seed_active_queue(cycle_index)

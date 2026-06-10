@@ -1,4 +1,9 @@
 from scheduling_sim.models import Packet, UserEquipment
+from scheduling_sim.pdb_arrivals import (
+    build_periodic_pdb_schedule,
+    resolve_analysis_window_ms,
+    resolve_periodic_runtime_ms,
+)
 from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
 from scheduling_sim.ranking import EpfRankingPolicy
@@ -29,6 +34,14 @@ class UlSimulator:
             self.wireless_env.reset(reset_users)
             self._record_radio_states(reset_users)
         self._cycle_served_bits_by_ue = {user.ue_id: 0 for user in self.users}
+        self.analysis_window_ms = resolve_analysis_window_ms(config)
+        self.periodic_pdb_schedule = build_periodic_pdb_schedule(
+            self.users,
+            random_seed=getattr(self.config.simulation, "random_seed", 0),
+            analysis_window_ms=self.analysis_window_ms,
+        )
+        self._next_periodic_arrival_index_by_ue = {ue_id: 0 for ue_id in self.periodic_pdb_schedule}
+        self._target_edge_marked = False
 
     def _build_wireless_env(self):
         radio_section = getattr(self.config, "radio", None)
@@ -96,12 +109,20 @@ class UlSimulator:
             elif self.queue.contains(user) and (head_packet is None or head_eligible_cycle > cycle_index):
                 self.queue.deactivate(user)
 
-    def inject_packet(self, user, packet_bits: int, cycle_index: int, slot_name: str, is_target: bool = False) -> None:
+    def inject_packet(
+        self,
+        user,
+        packet_bits: int,
+        cycle_index: int,
+        slot_name: str,
+        is_target: bool = False,
+        arrival_time_ms: int | None = None,
+    ) -> None:
         eligible_cycle = cycle_index + 1 if slot_name.startswith("U") else cycle_index
         head_before_arrival = user.lc.head_packet
         packet = Packet(
             packet_id=f"{user.ue_id}-{cycle_index}-{slot_name}",
-            arrival_time=cycle_index * 5,
+            arrival_time=cycle_index * 5 if arrival_time_ms is None else arrival_time_ms,
             size_bits=packet_bits,
             remaining_bits=packet_bits,
             pdb_ms=user.traffic_profile.pdb_ms,
@@ -166,11 +187,12 @@ class UlSimulator:
         total_prb_used = 0
         self._preload_initial_backlog()
         slots_per_cycle = len(self.config.simulation.tdd_pattern)
-        simulation_duration_ms = (
+        base_runtime_ms = (
             self.config.simulation.cycles
             * len(self.config.simulation.tdd_pattern)
             * self.config.simulation.slot_duration_ms
         )
+        simulation_duration_ms = resolve_periodic_runtime_ms(base_runtime_ms, self.users, self.analysis_window_ms)
         should_stop = False
         for cycle_index in range(self.config.simulation.cycles):
             self.seed_active_queue(cycle_index)
@@ -199,7 +221,7 @@ class UlSimulator:
                     d_plan=d_plan,
                     s_plan=s_plan,
                 )
-                self._inject_u_slot_arrivals(cycle_index, u_slot_index)
+                self._inject_u_slot_arrivals(cycle_index, u_slot_index, now_ms)
                 self.seed_active_queue(cycle_index + 1)
                 if self._should_stop_after_target_edge_finished():
                     simulation_duration_ms = now_ms + self.config.simulation.slot_duration_ms
@@ -225,12 +247,13 @@ class UlSimulator:
         return any(bool(packet.get("is_target")) for packet in completed_packets)
 
     def _preload_initial_backlog(self) -> None:
-        target_edge_marked = False
         for user in self.users:
             profile = user.traffic_profile
             if profile is None:
                 continue
-            is_target = user.is_edge_user and not target_edge_marked
+            if user.is_edge_user and profile.arrival_mode == "periodic_by_pdb":
+                continue
+            is_target = self._should_mark_target(user)
             self.inject_packet(
                 user,
                 profile.packet_bits,
@@ -238,20 +261,45 @@ class UlSimulator:
                 slot_name="D",
                 is_target=is_target,
             )
-            if is_target:
-                target_edge_marked = True
 
-    def _inject_u_slot_arrivals(self, cycle_index: int, u_slot_index: int) -> None:
+    def _inject_u_slot_arrivals(self, cycle_index: int, u_slot_index: int, now_ms: int) -> None:
         global_slot = cycle_index * 3 + u_slot_index
         for user in self.users:
             profile = user.traffic_profile
             if profile is None:
                 continue
             if user.is_edge_user:
+                if profile.arrival_mode == "periodic_by_pdb":
+                    continue
                 if profile.burst_cycle_interval and (cycle_index + 1) % profile.burst_cycle_interval == 0 and u_slot_index == 0:
                     self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
             elif profile.period_slots and global_slot % profile.period_slots == 0:
                 self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
+        self._inject_due_periodic_edge_arrivals(cycle_index, u_slot_index, now_ms)
+
+    def _should_mark_target(self, user: UserEquipment) -> bool:
+        if not user.is_edge_user or self._target_edge_marked:
+            return False
+        self._target_edge_marked = True
+        return True
+
+    def _inject_due_periodic_edge_arrivals(self, cycle_index: int, u_slot_index: int, now_ms: int) -> None:
+        for user in self.users:
+            arrival_schedule = self.periodic_pdb_schedule.get(user.ue_id)
+            if not arrival_schedule:
+                continue
+            next_index = self._next_periodic_arrival_index_by_ue[user.ue_id]
+            while next_index < len(arrival_schedule) and arrival_schedule[next_index] <= now_ms:
+                self.inject_packet(
+                    user,
+                    user.traffic_profile.packet_bits,
+                    cycle_index=cycle_index,
+                    slot_name=f"U{u_slot_index + 1}",
+                    is_target=self._should_mark_target(user),
+                    arrival_time_ms=arrival_schedule[next_index],
+                )
+                next_index += 1
+            self._next_periodic_arrival_index_by_ue[user.ue_id] = next_index
 
     def _execute_u_slot(self, cycle_index: int, slot_index: int, now_ms: int, d_plan, s_plan) -> int:
         grant_bits_by_user, prb_count_by_user = self._merge_u_slot_grants(slot_index, d_plan, s_plan)

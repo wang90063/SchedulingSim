@@ -97,6 +97,7 @@ class StableWirelessEnvTests(unittest.TestCase):
         env.reset([center_b_only])
 
         self.assertEqual(center_b_only.current_radio_state.snr_db, full_state.snr_db)
+        self.assertEqual(center_b_only.current_radio_state.mcs_index, full_state.mcs_index)
         self.assertEqual(center_b_only.current_radio_state.bits_per_prb, full_state.bits_per_prb)
 
     def test_refresh_slot_is_stable_for_same_user_even_when_user_order_changes(self) -> None:
@@ -120,8 +121,8 @@ class StableWirelessEnvTests(unittest.TestCase):
         poor = make_user("poor-0", is_edge=True, distance_to_bs_m=470.0)
         medium = make_user("medium-0", is_edge=False, distance_to_bs_m=210.0)
 
-        env.reset([poor, medium])
-        env.refresh_slot([poor, medium], slot_index=4, slot_name="U2")
+        env.reset([medium, poor])
+        env.refresh_slot([medium, poor], slot_index=4, slot_name="U2")
         full_state = poor.current_radio_state
 
         poor_again = make_user("poor-0", is_edge=True, distance_to_bs_m=470.0)
@@ -129,6 +130,7 @@ class StableWirelessEnvTests(unittest.TestCase):
         env.refresh_slot([poor_again], slot_index=4, slot_name="U2")
 
         self.assertEqual(poor_again.current_radio_state.snr_db, full_state.snr_db)
+        self.assertEqual(poor_again.current_radio_state.mcs_index, full_state.mcs_index)
         self.assertEqual(poor_again.current_radio_state.bits_per_prb, full_state.bits_per_prb)
 
     def test_refresh_maps_mcs_from_clamped_snr(self) -> None:

@@ -170,7 +170,7 @@ class DummyMetrics:
         window_total_prb_available: int = 0,
         slot_duration_ms: int = 1,
         tdd_pattern: str = "DSUUU",
-    ) -> dict[str, float]:
+    ) -> dict[str, float | int | bool | str]:
         return {
             "total_prb_used": float(total_prb_used),
             "total_prb_available": float(total_prb_available),
@@ -457,6 +457,15 @@ class SimulatorCycleTests(unittest.TestCase):
         self.assertEqual(summary["pdb_arrivals_in_window"], 2)
         self.assertEqual(summary["pdb_packets_completed_in_window_set"], 2)
         self.assertEqual(summary["edge_pdb_satisfaction_rate"], 1.0)
+
+    def test_run_summary_includes_default_arrival_metadata_for_legacy_configs(self) -> None:
+        config = self._legacy_config()
+        users = ScenarioFactory(config).build_users()
+
+        summary = UlSimulator(config, users, DummyMetrics()).run()
+
+        self.assertEqual(summary["arrival_mode"], "single_burst")
+        self.assertEqual(summary["initial_phase_mode"], "none")
 
     def test_u_slot_arrivals_preserve_center_periodic_injection(self) -> None:
         config = AppConfig(

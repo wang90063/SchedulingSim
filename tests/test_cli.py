@@ -319,6 +319,63 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("report.json", result.stdout)
 
+    def test_run_command_supports_periodic_pdb_fixed_window_config(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "periodic_pdb.json"
+            output_dir = Path(tmp) / "periodic-output"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "simulation": {
+                            "cycles": 20,
+                            "slot_duration_ms": 1,
+                            "tdd_pattern": "DSUUU",
+                            "random_seed": 7,
+                            "analysis_window_ms": 10000,
+                        },
+                        "resources": {"total_prb_per_u_slot": 20, "max_ue_per_slot": 4},
+                        "traffic": {
+                            "center": {
+                                "count": 4,
+                                "period_slots": 6,
+                                "packet_bits": 960,
+                                "pdb_ms": None,
+                                "gbr_bps": 7000,
+                            },
+                            "edge": {
+                                "count": 2,
+                                "packet_bits": 80000,
+                                "pdb_ms": 200,
+                                "arrival_mode": "periodic_by_pdb",
+                                "initial_phase_mode": "uniform_0_to_pdb",
+                            },
+                        },
+                        "radio": {
+                            "center": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+                            "edge": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+                        },
+                        "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+                        "report": {"output_dir": str(output_dir), "keep_slot_trace": False},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python", "-m", "scheduling_sim.cli", "run", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            summary = json.loads((output_dir / "report.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["arrival_mode"], "periodic_by_pdb")
+            self.assertEqual(summary["initial_phase_mode"], "uniform_0_to_pdb")
+            self.assertEqual(summary["analysis_window_ms"], 10000.0)
+            self.assertIn("pdb_arrivals_in_window", summary)
+
     def test_run_command_supports_baseline_override(self) -> None:
         result = subprocess.run(
             [

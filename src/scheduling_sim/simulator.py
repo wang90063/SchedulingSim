@@ -202,7 +202,7 @@ class UlSimulator:
             )
         return plan
 
-    def run(self) -> dict[str, float]:
+    def run(self) -> dict[str, float | int | bool | str]:
         self._preload_initial_backlog()
         slots_per_cycle = len(self.config.simulation.tdd_pattern)
         cycle_duration_ms = slots_per_cycle * self.config.simulation.slot_duration_ms
@@ -272,7 +272,7 @@ class UlSimulator:
             if should_stop:
                 break
         self._refresh_hol(simulation_duration_ms)
-        return self.metrics.build_summary(
+        summary = self.metrics.build_summary(
             total_prb_used=total_prb_used,
             total_prb_available=total_prb_available,
             window_total_prb_used=window_total_prb_used,
@@ -283,6 +283,9 @@ class UlSimulator:
             slot_duration_ms=self.config.simulation.slot_duration_ms,
             tdd_pattern=self.config.simulation.tdd_pattern,
         )
+        summary["arrival_mode"] = self.config.traffic.edge.arrival_mode
+        summary["initial_phase_mode"] = self.config.traffic.edge.initial_phase_mode
+        return summary
 
     def _should_stop_after_target_edge_finished(self) -> bool:
         if not getattr(self.config.simulation, "stop_when_target_edge_finished", False):

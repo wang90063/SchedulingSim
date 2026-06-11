@@ -160,7 +160,7 @@ class MetricsCollector:
         window_total_prb_available: int | None = None,
         slot_duration_ms: int = 1,
         tdd_pattern: str = "DSUUU",
-    ) -> dict[str, float]:
+    ) -> dict[str, float | int | bool | str]:
         user_list = list(users or [])
         resolved_analysis_window_ms = int(analysis_window_ms) if analysis_window_ms is not None else int(simulation_duration_ms)
         resolved_window_total_prb_used = (

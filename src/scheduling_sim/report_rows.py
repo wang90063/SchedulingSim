@@ -31,7 +31,7 @@ COMMON_SUMMARY_ROW_FIELDS: tuple[str, ...] = (
 BOOLEAN_SUMMARY_ROW_FIELDS = frozenset({"target_edge_finished", "target_edge_pdb_met"})
 
 
-def build_common_summary_row(summary: dict[str, float | int | bool]) -> dict[str, float | int | bool]:
+def build_common_summary_row(summary: dict[str, float | int | bool | str]) -> dict[str, float | int | bool]:
     return {
         field: bool(summary[field]) if field in BOOLEAN_SUMMARY_ROW_FIELDS else summary[field]
         for field in COMMON_SUMMARY_ROW_FIELDS

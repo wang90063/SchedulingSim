@@ -69,46 +69,6 @@ class StableWirelessEnvTests(unittest.TestCase):
         second = center_user.current_radio_state.snr_db
         self.assertLess(abs(second - first), 3.0)
 
-    def test_higher_per_prb_tx_power_raises_uma_sinr(self) -> None:
-        low_power_env = StableWirelessEnv(
-            WirelessEnvConfigView(
-                scenario_type="uma",
-                cell_radius_m=500.0,
-                carrier_frequency_ghz=3.5,
-                per_prb_tx_power_dbm=5.0,
-                noise_figure_db=7.0,
-                interference_margin_db=3.0,
-                shadow_std_db=0.0,
-                slow_fading_alpha=1.0,
-                slot_jitter_std_db=0.0,
-                mcs_table=[McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24)],
-                seed=7,
-            )
-        )
-        high_power_env = StableWirelessEnv(
-            WirelessEnvConfigView(
-                scenario_type="uma",
-                cell_radius_m=500.0,
-                carrier_frequency_ghz=3.5,
-                per_prb_tx_power_dbm=12.0,
-                noise_figure_db=7.0,
-                interference_margin_db=1.0,
-                shadow_std_db=0.0,
-                slow_fading_alpha=1.0,
-                slot_jitter_std_db=0.0,
-                mcs_table=[McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24)],
-                seed=7,
-            )
-        )
-        low_power_user = make_user("edge-low", is_edge=True, distance_to_bs_m=425.0)
-        high_power_user = make_user("edge-high", is_edge=True, distance_to_bs_m=425.0)
-
-        low_power_env.reset([low_power_user])
-        high_power_env.reset([high_power_user])
-
-        self.assertLess(low_power_user.current_radio_state.snr_db, 0.0)
-        self.assertGreater(high_power_user.current_radio_state.snr_db, 3.0)
-
     def test_reset_is_stable_for_same_user_even_when_other_users_are_removed(self) -> None:
         env = StableWirelessEnv(
             WirelessEnvConfigView(

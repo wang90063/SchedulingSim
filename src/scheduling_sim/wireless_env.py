@@ -23,7 +23,6 @@ class WirelessEnvConfigView:
     scenario_type: str = "legacy"
     cell_radius_m: float = 0.0
     carrier_frequency_ghz: float = 0.0
-    per_prb_tx_power_dbm: float = 5.0
     noise_figure_db: float = 0.0
     interference_margin_db: float = 0.0
     shadow_std_db: float = 0.0
@@ -163,7 +162,7 @@ class StableWirelessEnv:
 
     def _build_uplink_budget_db(self) -> float:
         thermal_noise_per_prb_dbm = -174.0 + 10.0 * math.log10(180_000.0)
-        per_prb_tx_power_dbm = self._config.per_prb_tx_power_dbm
+        per_prb_tx_power_dbm = 5.0
         return per_prb_tx_power_dbm - (thermal_noise_per_prb_dbm + self._config.noise_figure_db)
 
     def _uma_path_loss_db(self, distance_to_bs_m: float) -> float:

@@ -751,7 +751,7 @@ class SimulatorCycleTests(unittest.TestCase):
         )
         users = ScenarioFactory(config).build_users()
         summary = UlSimulator(config, users, MetricsCollector()).run()
-        self.assertEqual(summary["served_bits"], summary["throughput_bits"])
+        self.assertGreater(summary["served_bits"], summary["throughput_bits"])
 
     def test_run_updates_average_throughput_from_cycle_rate(self) -> None:
         config = AppConfig(
@@ -1141,6 +1141,35 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["center_bits_per_used_prb"], 40.0)
         self.assertEqual(summary["edge_bits_per_used_prb"], 80.0 / 3.0)
 
+    def test_target_edge_total_bits_tracks_target_packet_only(self) -> None:
+        collector = MetricsCollector()
+        collector.record_bits_served(user_class="edge", bits_sent=80, ue_id="edge-0")
+        collector.record_bits_served(user_class="edge", bits_sent=80, ue_id="edge-0")
+        collector.record_packet_completed(
+            packet_id="edge-0-target",
+            completion_time=10,
+            arrival_time=0,
+            pdb_ms=15,
+            bits_sent=80,
+            user_class="edge",
+            ue_id="edge-0",
+            is_target=True,
+            first_service_time=2,
+            service_slot_count=1,
+            control_slot_count_while_pending=2,
+            waiting_u_slot_count_before_first_service=0,
+            waiting_u_slot_count_after_first_service=0,
+        )
+        summary = collector.build_summary(
+            total_prb_used=8,
+            total_prb_available=10,
+            users=[self._make_user("edge-0", is_edge_user=True)],
+            simulation_duration_ms=10,
+            slot_duration_ms=1,
+        )
+        self.assertEqual(summary["target_edge_total_bits"], 80.0)
+        self.assertEqual(summary["target_edge_rate_bps"], 8000.0)
+
     def test_metrics_ignore_packets_without_pdb_in_deadline_kpis(self) -> None:
         collector = MetricsCollector()
         collector.record_packet_completed(
@@ -1188,6 +1217,7 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["pdb_arrivals_in_window"], 1)
         self.assertEqual(summary["pdb_packets_completed_in_window_set"], 1)
         self.assertEqual(summary["edge_pdb_satisfaction_rate"], 1.0)
+        self.assertEqual(summary["pdb_violation_rate"], 0.0)
 
 
 if __name__ == "__main__":

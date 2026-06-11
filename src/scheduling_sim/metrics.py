@@ -175,7 +175,15 @@ class MetricsCollector:
         )
         delays = [item["delay_ms"] for item in self.completed_packets] or [0]
         pdb_packets = [item for item in self.completed_packets if item["pdb_ms"] is not None]
-        violations = [item for item in pdb_packets if item["delay_ms"] > item["pdb_ms"]]
+        in_window_pdb_packets = [
+            item for item in pdb_packets if item.get("arrival_in_analysis_window", True)
+        ]
+        deadline_kpi_pdb_packets = (
+            in_window_pdb_packets
+            if resolved_analysis_window_ms < simulation_duration_ms
+            else pdb_packets
+        )
+        violations = [item for item in deadline_kpi_pdb_packets if item["delay_ms"] > item["pdb_ms"]]
         center_packets = [item for item in self.completed_packets if item["user_class"] == "center"]
         edge_packets = [item for item in self.completed_packets if item["user_class"] == "edge"]
         edge_pdb_packets_in_window = [
@@ -315,25 +323,30 @@ class MetricsCollector:
             target_ue_id = target_completed.get("ue_id")
         elif target_pending is not None:
             target_ue_id = target_pending["ue_id"]
-        target_edge_total_bits = float(
-            self.served_bits_in_window_by_user.get(str(target_ue_id), 0)
-            if target_ue_id is not None
-            else 0.0
-        )
+        target_edge_total_bits = float(target_summary["target_edge_served_bits"])
         center_agg_rate_bps = center_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
         edge_agg_rate_bps = edge_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
         target_edge_rate_bps = target_edge_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
         system_agg_rate_bps = system_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
+        throughput_bits = (
+            self.served_bits_in_window_total
+            if resolved_analysis_window_ms < simulation_duration_ms
+            else sum(item["bits_sent"] for item in self.completed_packets)
+        )
         return {
             "avg_delay_ms": statistics.mean(delays),
             "p95_delay_ms": self._percentile(delays, 0.95),
             "p99_delay_ms": self._percentile(delays, 0.99),
             "simulation_duration_ms": float(simulation_duration_ms),
             "analysis_window_ms": float(resolved_analysis_window_ms),
-            "pdb_violation_rate": len(violations) / len(self.completed_packets) if self.completed_packets else 0.0,
+            "pdb_violation_rate": (
+                len(violations) / len(deadline_kpi_pdb_packets)
+                if deadline_kpi_pdb_packets
+                else 0.0
+            ),
             "pdb_arrivals_in_window": len(self.pdb_arrivals_in_window_set),
             "pdb_packets_completed_in_window_set": len(self.pdb_packets_completed_in_window_set),
-            "throughput_bits": self.served_bits_in_window_total,
+            "throughput_bits": throughput_bits,
             "served_bits": self.served_bits_total,
             "center_served_bits": self.served_bits_by_group["center"],
             "edge_served_bits": self.served_bits_by_group["edge"],

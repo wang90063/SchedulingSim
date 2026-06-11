@@ -2,12 +2,20 @@ import random
 
 
 def resolve_analysis_window_ms(config) -> int:
-    explicit_window_ms = getattr(config.simulation, "analysis_window_ms", None)
+    simulation = getattr(config, "simulation", None)
+    explicit_window_ms = getattr(simulation, "analysis_window_ms", None)
     if explicit_window_ms is not None:
         return int(explicit_window_ms)
-    if getattr(config.traffic.edge, "arrival_mode", "single_burst") == "periodic_by_pdb":
+    traffic = getattr(config, "traffic", None)
+    edge_profile = getattr(traffic, "edge", None)
+    if getattr(edge_profile, "arrival_mode", "single_burst") == "periodic_by_pdb":
         return 10000
-    return int(config.simulation.cycles * len(config.simulation.tdd_pattern) * config.simulation.slot_duration_ms)
+    cycles = getattr(simulation, "cycles", None)
+    tdd_pattern = getattr(simulation, "tdd_pattern", None)
+    slot_duration_ms = getattr(simulation, "slot_duration_ms", None)
+    if cycles is None or tdd_pattern is None or slot_duration_ms is None:
+        return 0
+    return int(cycles * len(tdd_pattern) * slot_duration_ms)
 
 
 def build_periodic_pdb_schedule(users, random_seed: int, analysis_window_ms: int) -> dict[str, list[int]]:

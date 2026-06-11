@@ -37,10 +37,29 @@ SUMMARY = {
     "edge_prb_share": 0.67,
     "center_bits_per_used_prb": 100.0,
     "edge_bits_per_used_prb": 160000.0,
+    "arrival_mode": "periodic_by_pdb",
+    "initial_phase_mode": "uniform_0_to_pdb",
 }
 
 
 class PacketSizeSensitivityReportTests(unittest.TestCase):
+    def test_build_row_keeps_periodic_metadata_in_summary_outputs(self) -> None:
+        row = _build_row(
+            edge_packet_kb=400,
+            dimension="edge_pdb_ms",
+            value=500,
+            policy="tail_append",
+            summary=SUMMARY,
+            config_metadata={
+                "total_prb_per_u_slot": 273,
+                "center_pdb_ms": None,
+                "edge_per_u_slot_prb_cap": 273,
+            },
+        )
+
+        self.assertEqual(row["arrival_mode"], "periodic_by_pdb")
+        self.assertEqual(row["initial_phase_mode"], "uniform_0_to_pdb")
+
     def test_report_and_rows_use_configured_prb_and_center_pdb_metadata(self) -> None:
         payload = {
             "resources": {"total_prb_per_u_slot": 273},

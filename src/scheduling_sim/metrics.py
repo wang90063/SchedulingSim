@@ -178,12 +178,6 @@ class MetricsCollector:
         in_window_pdb_packets = [
             item for item in pdb_packets if item.get("arrival_in_analysis_window", True)
         ]
-        deadline_kpi_pdb_packets = (
-            in_window_pdb_packets
-            if resolved_analysis_window_ms < simulation_duration_ms
-            else pdb_packets
-        )
-        violations = [item for item in deadline_kpi_pdb_packets if item["delay_ms"] > item["pdb_ms"]]
         center_packets = [item for item in self.completed_packets if item["user_class"] == "center"]
         edge_packets = [item for item in self.completed_packets if item["user_class"] == "edge"]
         edge_pdb_packets_in_window = [
@@ -193,6 +187,21 @@ class MetricsCollector:
         ]
         center_users = [user for user in user_list if not user.is_edge_user]
         edge_users = [user for user in user_list if user.is_edge_user]
+        if resolved_analysis_window_ms < simulation_duration_ms:
+            on_time_in_window_pdb_packets = [
+                item for item in in_window_pdb_packets if item["delay_ms"] <= item["pdb_ms"]
+            ]
+            pending_in_window_pdb_count = sum(
+                1
+                for user in user_list
+                for packet in getattr(user.lc, "packets", [])
+                if packet.pdb_ms is not None and packet.arrival_time < resolved_analysis_window_ms
+            )
+            deadline_kpi_pdb_denominator = len(in_window_pdb_packets) + pending_in_window_pdb_count
+            violation_count = deadline_kpi_pdb_denominator - len(on_time_in_window_pdb_packets)
+        else:
+            deadline_kpi_pdb_denominator = len(pdb_packets)
+            violation_count = sum(1 for item in pdb_packets if item["delay_ms"] > item["pdb_ms"])
         simulation_duration_seconds = simulation_duration_ms / 1000.0 if simulation_duration_ms > 0 else 0.0
         analysis_window_seconds = resolved_analysis_window_ms / 1000.0 if resolved_analysis_window_ms > 0 else 0.0
         center_total_bits = float(self.served_bits_in_window_by_group["center"])
@@ -340,8 +349,8 @@ class MetricsCollector:
             "simulation_duration_ms": float(simulation_duration_ms),
             "analysis_window_ms": float(resolved_analysis_window_ms),
             "pdb_violation_rate": (
-                len(violations) / len(deadline_kpi_pdb_packets)
-                if deadline_kpi_pdb_packets
+                violation_count / deadline_kpi_pdb_denominator
+                if deadline_kpi_pdb_denominator
                 else 0.0
             ),
             "pdb_arrivals_in_window": len(self.pdb_arrivals_in_window_set),

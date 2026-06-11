@@ -15,7 +15,7 @@ EDGE_PDB_VALUES = (100, 150, 200)
 POLICIES = ("tail_append", "business_aware_constrained_insert")
 
 
-def run_case(config, edge_pdb_ms: int, policy: str) -> dict[str, float]:
+def run_case(config, edge_pdb_ms: int, policy: str) -> dict[str, float | int | bool | str]:
     traffic = replace(
         config.traffic,
         edge=replace(config.traffic.edge, pdb_ms=edge_pdb_ms),

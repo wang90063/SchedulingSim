@@ -1,4 +1,5 @@
 import unittest
+from types import SimpleNamespace
 
 from scheduling_sim.config import (
     AppConfig,
@@ -91,6 +92,23 @@ class PeriodicPdbArrivalTests(unittest.TestCase):
         config = self._make_config(cycles=4, slot_duration_ms=2, analysis_window_ms=None, edge_arrival_mode="single_burst")
 
         self.assertEqual(resolve_analysis_window_ms(config), 40)
+
+    def test_missing_traffic_section_falls_back_to_configured_runtime(self) -> None:
+        config = SimpleNamespace(
+            simulation=SimpleNamespace(
+                cycles=4,
+                slot_duration_ms=2,
+                tdd_pattern="DSUUU",
+                analysis_window_ms=None,
+            )
+        )
+
+        self.assertEqual(resolve_analysis_window_ms(config), 40)
+
+    def test_partial_simulation_config_without_runtime_fields_falls_back_to_zero(self) -> None:
+        config = SimpleNamespace(simulation=SimpleNamespace(deadline_guard_ms=0))
+
+        self.assertEqual(resolve_analysis_window_ms(config), 0)
 
     def test_none_phase_builds_exact_pdb_multiples(self) -> None:
         user = self._make_user("edge-0", is_edge_user=True, pdb_ms=200, initial_phase_mode="none")

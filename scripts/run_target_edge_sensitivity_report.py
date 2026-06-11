@@ -16,7 +16,7 @@ def _load_payload(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _run_summary(config) -> dict[str, float]:
+def _run_summary(config) -> dict[str, float | int | bool | str]:
     users = ScenarioFactory(config).build_users()
     return UlSimulator(config, users, MetricsCollector()).run()
 

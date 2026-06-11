@@ -1228,6 +1228,20 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["edge_pdb_satisfaction_rate"], 1.0)
         self.assertEqual(summary["pdb_violation_rate"], 0.0)
 
+    def test_periodic_mode_counts_unfinished_in_window_pdb_packets_as_violations(self) -> None:
+        collector = MetricsCollector()
+        pending_edge_user = self._make_user("edge-pending", is_edge_user=True, hol_ms=20, pdb_ms=5)
+
+        summary = collector.build_summary(
+            total_prb_used=0,
+            total_prb_available=1,
+            users=[pending_edge_user],
+            simulation_duration_ms=20,
+            analysis_window_ms=12,
+        )
+
+        self.assertEqual(summary["pdb_violation_rate"], 1.0)
+
 
 if __name__ == "__main__":
     unittest.main()

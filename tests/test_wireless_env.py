@@ -69,6 +69,108 @@ class StableWirelessEnvTests(unittest.TestCase):
         second = center_user.current_radio_state.snr_db
         self.assertLess(abs(second - first), 3.0)
 
+    def test_higher_per_prb_tx_power_raises_uma_sinr(self) -> None:
+        low_power_env = StableWirelessEnv(
+            WirelessEnvConfigView(
+                scenario_type="uma",
+                cell_radius_m=500.0,
+                carrier_frequency_ghz=3.5,
+                per_prb_tx_power_dbm=5.0,
+                noise_figure_db=7.0,
+                interference_margin_db=3.0,
+                shadow_std_db=0.0,
+                slow_fading_alpha=1.0,
+                slot_jitter_std_db=0.0,
+                mcs_table=[McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24)],
+                seed=7,
+            )
+        )
+        high_power_env = StableWirelessEnv(
+            WirelessEnvConfigView(
+                scenario_type="uma",
+                cell_radius_m=500.0,
+                carrier_frequency_ghz=3.5,
+                per_prb_tx_power_dbm=12.0,
+                noise_figure_db=7.0,
+                interference_margin_db=1.0,
+                shadow_std_db=0.0,
+                slow_fading_alpha=1.0,
+                slot_jitter_std_db=0.0,
+                mcs_table=[McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24)],
+                seed=7,
+            )
+        )
+        low_power_user = make_user("edge-low", is_edge=True, distance_to_bs_m=425.0)
+        high_power_user = make_user("edge-high", is_edge=True, distance_to_bs_m=425.0)
+
+        low_power_env.reset([low_power_user])
+        high_power_env.reset([high_power_user])
+
+        self.assertLess(low_power_user.current_radio_state.snr_db, 0.0)
+        self.assertGreater(high_power_user.current_radio_state.snr_db, 3.0)
+
+    def test_reset_is_stable_for_same_user_even_when_other_users_are_removed(self) -> None:
+        env = StableWirelessEnv(
+            WirelessEnvConfigView(
+                scenario_type="uma",
+                carrier_frequency_ghz=3.5,
+                noise_figure_db=7.0,
+                interference_margin_db=3.0,
+                shadow_std_db=4.0,
+                slow_fading_alpha=1.0,
+                slot_jitter_std_db=0.0,
+                mcs_table=[
+                    McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24),
+                    McsEntryView(snr_db=0.0, mcs_index=1, bits_per_prb=48),
+                    McsEntryView(snr_db=10.0, mcs_index=2, bits_per_prb=96),
+                ],
+                seed=17,
+            )
+        )
+        center_a = make_user("center-a", is_edge=False, distance_to_bs_m=120.0)
+        center_b = make_user("center-b", is_edge=False, distance_to_bs_m=180.0)
+
+        env.reset([center_a, center_b])
+        full_state = center_b.current_radio_state
+
+        center_b_only = make_user("center-b", is_edge=False, distance_to_bs_m=180.0)
+        env.reset([center_b_only])
+
+        self.assertEqual(center_b_only.current_radio_state.snr_db, full_state.snr_db)
+        self.assertEqual(center_b_only.current_radio_state.bits_per_prb, full_state.bits_per_prb)
+
+    def test_refresh_slot_is_stable_for_same_user_even_when_user_order_changes(self) -> None:
+        env = StableWirelessEnv(
+            WirelessEnvConfigView(
+                scenario_type="uma",
+                carrier_frequency_ghz=3.5,
+                noise_figure_db=7.0,
+                interference_margin_db=3.0,
+                shadow_std_db=4.0,
+                slow_fading_alpha=0.95,
+                slot_jitter_std_db=0.5,
+                mcs_table=[
+                    McsEntryView(snr_db=-5.0, mcs_index=0, bits_per_prb=24),
+                    McsEntryView(snr_db=0.0, mcs_index=1, bits_per_prb=48),
+                    McsEntryView(snr_db=10.0, mcs_index=2, bits_per_prb=96),
+                ],
+                seed=23,
+            )
+        )
+        poor = make_user("poor-0", is_edge=True, distance_to_bs_m=470.0)
+        medium = make_user("medium-0", is_edge=False, distance_to_bs_m=210.0)
+
+        env.reset([poor, medium])
+        env.refresh_slot([poor, medium], slot_index=4, slot_name="U2")
+        full_state = poor.current_radio_state
+
+        poor_again = make_user("poor-0", is_edge=True, distance_to_bs_m=470.0)
+        env.reset([poor_again])
+        env.refresh_slot([poor_again], slot_index=4, slot_name="U2")
+
+        self.assertEqual(poor_again.current_radio_state.snr_db, full_state.snr_db)
+        self.assertEqual(poor_again.current_radio_state.bits_per_prb, full_state.bits_per_prb)
+
     def test_refresh_maps_mcs_from_clamped_snr(self) -> None:
         env = StableWirelessEnv(
             WirelessEnvConfigView(

@@ -23,6 +23,7 @@ class WirelessEnvConfigView:
     scenario_type: str = "legacy"
     cell_radius_m: float = 0.0
     carrier_frequency_ghz: float = 0.0
+    per_prb_tx_power_dbm: float = 5.0
     noise_figure_db: float = 0.0
     interference_margin_db: float = 0.0
     shadow_std_db: float = 0.0
@@ -40,11 +41,28 @@ class StableWirelessEnv:
         self._shadow_cache: dict[str, float] = {}
         self._uma_uplink_budget_db = self._build_uplink_budget_db()
 
+    @staticmethod
+    def _seed_token(*parts: object) -> str:
+        return ":".join(str(part) for part in parts)
+
+    def _shadow_db_for_user(self, ue_id: str) -> float:
+        cached = self._shadow_cache.get(ue_id)
+        if cached is not None:
+            return cached
+        rng = random.Random(self._seed_token(self._config.seed, ue_id, "shadow"))
+        shadow_db = rng.gauss(0.0, self._config.shadow_std_db)
+        self._shadow_cache[ue_id] = shadow_db
+        return shadow_db
+
+    def _slot_jitter_db(self, *, ue_id: str, slot_index: int, slot_name: str) -> float:
+        rng = random.Random(self._seed_token(self._config.seed, ue_id, slot_index, slot_name, "jitter"))
+        return rng.gauss(0.0, self._config.slot_jitter_std_db)
+
     def reset(self, users: list[UserEquipment]) -> None:
         self._rng = random.Random(self._config.seed)
         self._shadow_cache = {}
         for user in users:
-            snr_db = self._resolve_snr_db(user, previous_snr_db=None)
+            snr_db = self._resolve_snr_db(user, previous_snr_db=None, slot_index=0, slot_name="RESET")
             mcs_entry = self._resolve_mcs(snr_db)
             user.current_radio_state = CurrentRadioState(
                 snr_db=snr_db,
@@ -54,14 +72,18 @@ class StableWirelessEnv:
             )
 
     def refresh_slot(self, users: list[UserEquipment], slot_index: int, slot_name: str) -> None:
-        _ = (slot_index, slot_name)
         for user in users:
             previous_snr_db = (
                 user.radio_profile.base_snr_db
                 if user.current_radio_state is None
                 else user.current_radio_state.snr_db
             )
-            snr_db = self._resolve_snr_db(user, previous_snr_db=previous_snr_db)
+            snr_db = self._resolve_snr_db(
+                user,
+                previous_snr_db=previous_snr_db,
+                slot_index=slot_index,
+                slot_name=slot_name,
+            )
             mcs_entry = self._resolve_mcs(snr_db)
             user.current_radio_state = CurrentRadioState(
                 snr_db=snr_db,
@@ -85,17 +107,33 @@ class StableWirelessEnv:
             return None
         return user.radio_profile.edge_per_u_slot_prb_cap
 
-    def _resolve_snr_db(self, user: UserEquipment, previous_snr_db: float | None) -> float:
+    def _resolve_snr_db(
+        self,
+        user: UserEquipment,
+        previous_snr_db: float | None,
+        *,
+        slot_index: int,
+        slot_name: str,
+    ) -> float:
         if self._config.scenario_type == "uma":
-            return self._resolve_uma_snr_db(user, previous_snr_db)
+            return self._resolve_uma_snr_db(
+                user,
+                previous_snr_db,
+                slot_index=slot_index,
+                slot_name=slot_name,
+            )
         return self._resolve_legacy_snr_db(user, previous_snr_db)
 
-    def _resolve_uma_snr_db(self, user: UserEquipment, previous_snr_db: float | None) -> float:
+    def _resolve_uma_snr_db(
+        self,
+        user: UserEquipment,
+        previous_snr_db: float | None,
+        *,
+        slot_index: int,
+        slot_name: str,
+    ) -> float:
         path_loss_db = self._uma_path_loss_db(user.radio_profile.distance_to_bs_m)
-        shadow_db = self._shadow_cache.setdefault(
-            user.ue_id,
-            self._rng.gauss(0.0, self._config.shadow_std_db),
-        )
+        shadow_db = self._shadow_db_for_user(user.ue_id)
         mean_snr_db = (
             self._uma_uplink_budget_db
             - path_loss_db
@@ -104,7 +142,7 @@ class StableWirelessEnv:
         )
         if previous_snr_db is None:
             return mean_snr_db
-        jitter = self._rng.gauss(0.0, self._config.slot_jitter_std_db)
+        jitter = self._slot_jitter_db(ue_id=user.ue_id, slot_index=slot_index, slot_name=slot_name)
         return (
             self._config.slow_fading_alpha * previous_snr_db
             + (1.0 - self._config.slow_fading_alpha) * mean_snr_db
@@ -125,7 +163,7 @@ class StableWirelessEnv:
 
     def _build_uplink_budget_db(self) -> float:
         thermal_noise_per_prb_dbm = -174.0 + 10.0 * math.log10(180_000.0)
-        per_prb_tx_power_dbm = 5.0
+        per_prb_tx_power_dbm = self._config.per_prb_tx_power_dbm
         return per_prb_tx_power_dbm - (thermal_noise_per_prb_dbm + self._config.noise_figure_db)
 
     def _uma_path_loss_db(self, distance_to_bs_m: float) -> float:

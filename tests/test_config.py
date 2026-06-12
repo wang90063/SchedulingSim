@@ -175,6 +175,14 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.radio.edge.bits_per_prb, 360)
         self.assertTrue(config.simulation.stop_when_target_edge_finished)
 
+    def test_systematic_analysis_option1_config_uses_full_nr_ul_mcs_table(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "configs" / "systematic_simulation_analysis_option1.json"
+        config = load_config(config_path)
+        self.assertEqual(len(config.radio.environment.mcs_table), 15)
+        self.assertEqual(config.radio.center.bits_per_prb, 491)
+        self.assertEqual(config.radio.edge.bits_per_prb, 68)
+        self.assertGreater(config.radio.environment.mcs_table[-1].bits_per_prb, 800)
+
     def test_load_config_supports_packet_size_sensitivity_sweep(self) -> None:
         payload = {
             "simulation": {

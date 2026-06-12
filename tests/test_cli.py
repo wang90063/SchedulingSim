@@ -1,6 +1,7 @@
 import csv
 import json
 import os
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -304,6 +305,12 @@ def _write_tradeoff_fixture(root: Path) -> None:
         writer = csv.DictWriter(handle, fieldnames=TRADEOFF_CSV_FIELDNAMES)
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _write_nr_ul_main_table(config_dir: Path, repo_root: Path) -> None:
+    mcs_dir = config_dir / "mcs"
+    mcs_dir.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(repo_root / "configs" / "mcs" / "nr_ul_main.json", mcs_dir / "nr_ul_main.json")
 
 
 class CliSmokeTests(unittest.TestCase):
@@ -1001,6 +1008,7 @@ class CliSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "systematic_hopeless_front.json"
             output_dir = Path(tmp) / "systematic-hopeless-front-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
             payload = json.loads(
                 (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
             )
@@ -1031,6 +1039,7 @@ class CliSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             reused_dir = Path(tmp) / "reused"
             reused_dir.mkdir(parents=True, exist_ok=True)
+            _write_nr_ul_main_table(Path(tmp), repo_root)
             (reused_dir / "per_run_rows.csv").write_text(
                 "seed,scenario_id,policy,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,edge_pdb_satisfaction_rate,center_agg_rate_bps,center_avg_rate_bps,prb_utilization,center_prb_share,edge_prb_share,pdb_arrivals_in_window,pdb_violation_rate,target_edge_completion_delay_ms,target_edge_queue_wait_ms,target_edge_service_time_ms,edge_backlog_bits\n"
                 "7,bg24_pdb8_d100_k50_seed00,tail_append,24,8,100,50,0.0,1000.0,50.0,1.0,0.4,0.6,8.0,1.0,100.0,70.0,30.0,0.0\n"
@@ -1080,6 +1089,7 @@ class CliSmokeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             config_path = Path(tmp) / "systematic_small.json"
             output_dir = Path(tmp) / "systematic-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
             payload = json.loads(
                 (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
             )
@@ -1118,22 +1128,26 @@ class CliSmokeTests(unittest.TestCase):
             for row in candidate_rows:
                 self.assertTrue((output_dir / f"typical_case_{row['case_label']}.png").exists())
 
-    def test_expanded_systematic_analysis_config_declares_reuse_and_total_user_filter(self) -> None:
+    def test_expanded_systematic_analysis_config_declares_fresh_rerun_matrix(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         payload = json.loads(
             (repo_root / "configs" / "systematic_simulation_analysis_option1_expanded.json").read_text(
                 encoding="utf-8"
             )
         )
+        env = payload["radio"]["environment"]
         sweep = payload["systematic_analysis"]
+        self.assertEqual(env["mcs_table_path"], "mcs/nr_ul_main.json")
+        self.assertNotIn("mcs_table", env)
+        self.assertEqual(payload["report"]["output_dir"], "outputs/systematic_simulation_analysis_option1_expanded")
         self.assertEqual(sweep["background_user_count_values"], [16, 24, 32, 36, 40, 48])
         self.assertEqual(sweep["pdb_user_count_values"], [4, 8, 10, 12, 16])
         self.assertEqual(sweep["pdb_ms_values"], [100, 200, 300, 500, 600])
         self.assertEqual(sweep["pdb_packet_kb_values"], [20, 30, 40, 50, 70, 100, 150, 300])
         self.assertEqual(sweep["repeat_count"], 10)
         self.assertEqual(sweep["minimum_total_users"], 32)
-        self.assertEqual(sweep["reuse_output_dirs"], ["outputs/systematic_simulation_analysis_option1"])
-        self.assertEqual(sweep["merged_output_dir"], "outputs/systematic_simulation_analysis_option1_expanded")
+        self.assertNotIn("reuse_output_dirs", sweep)
+        self.assertNotIn("merged_output_dir", sweep)
 
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

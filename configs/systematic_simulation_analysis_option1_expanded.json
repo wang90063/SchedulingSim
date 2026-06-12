@@ -37,11 +37,7 @@
       "shadow_std_db": 4.0,
       "slow_fading_alpha": 0.95,
       "slot_jitter_std_db": 0.5,
-      "mcs_table": [
-        {"sinr_db": -5.0, "mcs_index": 0, "bits_per_prb": 24},
-        {"sinr_db": 0.0, "mcs_index": 1, "bits_per_prb": 48},
-        {"sinr_db": 10.0, "mcs_index": 2, "bits_per_prb": 96}
-      ]
+      "mcs_table_path": "mcs/nr_ul_main.json"
     },
     "center": {
       "base_snr_db": 12.0,
@@ -60,7 +56,7 @@
     "reinsert_policy": "tail_append"
   },
   "report": {
-    "output_dir": "outputs/systematic_simulation_analysis_option1_expanded_incremental",
+    "output_dir": "outputs/systematic_simulation_analysis_option1_expanded",
     "keep_slot_trace": false
   },
   "systematic_analysis": {
@@ -74,8 +70,6 @@
     "ours_policy": "hopeless_front_insert",
     "background_packet_kb": 2,
     "minimum_total_users": 32,
-    "reuse_output_dirs": ["outputs/systematic_simulation_analysis_option1"],
-    "merged_output_dir": "outputs/systematic_simulation_analysis_option1_expanded",
     "scene_bank": {
       "medium_distance_range_m": [170.0, 230.0],
       "good_distance_range_m": [80.0, 140.0],

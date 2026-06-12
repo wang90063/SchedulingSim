@@ -1,6 +1,7 @@
 import csv
 import importlib.util
 import json
+import math
 import os
 import subprocess
 import tempfile
@@ -25,6 +26,27 @@ class SystematicAnalysisPlotTests(unittest.TestCase):
         metric_specs = module._representative_case_metric_specs()
         self.assertEqual(len(metric_specs), 9)
         self.assertTrue(all(len(spec["metrics"]) == 1 for spec in metric_specs))
+
+    def test_grid_value_returns_nan_for_missing_scene_points(self) -> None:
+        module = _load_render_module()
+        rows = [
+            {
+                "background_user_count": "24",
+                "pdb_user_count": "4",
+                "pdb_ms": "100",
+                "pdb_packet_kb": "50",
+                "mean_delta_pdb_satisfaction_rate": "0.2",
+            }
+        ]
+        value = module._scene_value(
+            rows,
+            pdb_ms=100,
+            pdb_packet_kb=50,
+            background_user_count=36,
+            pdb_user_count=8,
+            field_name="mean_delta_pdb_satisfaction_rate",
+        )
+        self.assertTrue(math.isnan(value))
 
     def test_render_script_writes_overview_cost_and_boundary_plots(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

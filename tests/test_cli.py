@@ -1026,6 +1026,55 @@ class CliSmokeTests(unittest.TestCase):
             paired_rows = (output_dir / "paired_rows.csv").read_text(encoding="utf-8")
             self.assertIn("delta_pdb_satisfaction_rate", paired_rows)
 
+    def test_systematic_simulation_analysis_runner_reuses_existing_scene_keys_and_merges_outputs(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            reused_dir = Path(tmp) / "reused"
+            reused_dir.mkdir(parents=True, exist_ok=True)
+            (reused_dir / "per_run_rows.csv").write_text(
+                "seed,scenario_id,policy,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,edge_pdb_satisfaction_rate,center_agg_rate_bps,center_avg_rate_bps,prb_utilization,center_prb_share,edge_prb_share,pdb_arrivals_in_window,pdb_violation_rate,target_edge_completion_delay_ms,target_edge_queue_wait_ms,target_edge_service_time_ms,edge_backlog_bits\n"
+                "7,bg24_pdb8_d100_k50_seed00,tail_append,24,8,100,50,0.0,1000.0,50.0,1.0,0.4,0.6,8.0,1.0,100.0,70.0,30.0,0.0\n"
+                "7,bg24_pdb8_d100_k50_seed00,hopeless_front_insert,24,8,100,50,0.1,900.0,45.0,1.0,0.35,0.65,8.0,0.9,90.0,60.0,30.0,0.0\n",
+                encoding="utf-8",
+            )
+            (reused_dir / "paired_rows.csv").write_text(
+                "seed,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,baseline_edge_pdb_satisfaction_rate,proposed_edge_pdb_satisfaction_rate,delta_pdb_satisfaction_rate,center_throughput_retention,delta_prb_utilization,delta_center_prb_share,delta_edge_prb_share\n"
+                "7,24,8,100,50,0.0,0.1,0.1,0.9,0.0,-0.05,0.05\n",
+                encoding="utf-8",
+            )
+            config_path = Path(tmp) / "expanded.json"
+            incremental_output_dir = Path(tmp) / "incremental"
+            merged_output_dir = Path(tmp) / "merged"
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(incremental_output_dir)
+            payload["systematic_analysis"]["background_user_count_values"] = [24, 32]
+            payload["systematic_analysis"]["pdb_user_count_values"] = [8]
+            payload["systematic_analysis"]["pdb_ms_values"] = [100]
+            payload["systematic_analysis"]["pdb_packet_kb_values"] = [50]
+            payload["systematic_analysis"]["repeat_count"] = 1
+            payload["systematic_analysis"]["minimum_total_users"] = 32
+            payload["systematic_analysis"]["reuse_output_dirs"] = [str(reused_dir)]
+            payload["systematic_analysis"]["merged_output_dir"] = str(merged_output_dir)
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            with (merged_output_dir / "scene_summary.csv").open("r", encoding="utf-8", newline="") as handle:
+                merged_scene_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(merged_scene_rows), 2)
+            merged_manifest = json.loads((merged_output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(merged_manifest["reused_scene_point_count"], 1)
+            self.assertEqual(merged_manifest["new_scene_point_count"], 1)
+            self.assertEqual(merged_manifest["final_scene_point_count"], 2)
+
     def test_systematic_simulation_analysis_renderer_runs_on_runner_output(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
@@ -1068,6 +1117,23 @@ class CliSmokeTests(unittest.TestCase):
             self.assertGreaterEqual(len(candidate_rows), 1)
             for row in candidate_rows:
                 self.assertTrue((output_dir / f"typical_case_{row['case_label']}.png").exists())
+
+    def test_expanded_systematic_analysis_config_declares_reuse_and_total_user_filter(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        payload = json.loads(
+            (repo_root / "configs" / "systematic_simulation_analysis_option1_expanded.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        sweep = payload["systematic_analysis"]
+        self.assertEqual(sweep["background_user_count_values"], [16, 24, 32, 36, 40, 48])
+        self.assertEqual(sweep["pdb_user_count_values"], [4, 8, 10, 12, 16])
+        self.assertEqual(sweep["pdb_ms_values"], [100, 200, 300, 500, 600])
+        self.assertEqual(sweep["pdb_packet_kb_values"], [20, 30, 40, 50, 70, 100, 150, 300])
+        self.assertEqual(sweep["repeat_count"], 10)
+        self.assertEqual(sweep["minimum_total_users"], 32)
+        self.assertEqual(sweep["reuse_output_dirs"], ["outputs/systematic_simulation_analysis_option1"])
+        self.assertEqual(sweep["merged_output_dir"], "outputs/systematic_simulation_analysis_option1_expanded")
 
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

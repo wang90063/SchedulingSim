@@ -15,8 +15,11 @@ from scheduling_sim.systematic_analysis import (
     build_systematic_case_users,
     build_typical_case_detail_rows,
     capacity_summary_rows,
+    merge_row_sets,
     paired_metric_row,
     per_run_metric_row,
+    scene_key,
+    scene_key_set,
     select_typical_case_rows,
     summarize_regions,
     systematic_cases,
@@ -41,6 +44,13 @@ def _write_table(path: Path, rows: list[dict[str, object]]) -> None:
         writer.writerows(rows)
 
 
+def _read_table(path: Path) -> list[dict[str, object]]:
+    if not path.exists():
+        return []
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
 def _mean_metric(rows: list[dict[str, object]], field: str) -> float:
     if not rows:
         return 0.0
@@ -61,6 +71,27 @@ def _boundary_summary(boundary_rows: list[dict[str, object]]) -> dict[str, objec
         "regressed_points": len(regressed_rows),
         "expanded_rows": expanded_rows,
     }
+
+
+def _include_case_from_sweep(sweep: dict[str, object]):
+    minimum_total_users = int(sweep.get("minimum_total_users", 0) or 0)
+    if minimum_total_users <= 0:
+        return None
+    return lambda case: (case.background_user_count + case.pdb_user_count) >= minimum_total_users
+
+
+def _reuse_rows(reuse_output_dirs: list[str]) -> tuple[list[dict[str, object]], list[dict[str, object]], set[tuple[int, int, int, int]]]:
+    per_run_rows: list[dict[str, object]] = []
+    paired_rows: list[dict[str, object]] = []
+    scene_keys: set[tuple[int, int, int, int]] = set()
+    for directory in reuse_output_dirs:
+        reuse_dir = Path(directory)
+        reuse_per_run_rows = _read_table(reuse_dir / "per_run_rows.csv")
+        reuse_paired_rows = _read_table(reuse_dir / "paired_rows.csv")
+        per_run_rows.extend(reuse_per_run_rows)
+        paired_rows.extend(reuse_paired_rows)
+        scene_keys |= scene_key_set(reuse_paired_rows)
+    return per_run_rows, paired_rows, scene_keys
 
 
 def _summary_report(
@@ -296,6 +327,17 @@ def main() -> int:
     baseline_policy = str(sweep["baseline_policy"])
     ours_policy = str(sweep["ours_policy"])
     background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
+    reuse_output_dirs = [str(value) for value in sweep.get("reuse_output_dirs", [])]
+    existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(reuse_output_dirs)
+    include_case = _include_case_from_sweep(sweep)
+    all_cases = systematic_cases(
+        background_user_counts=list(sweep["background_user_count_values"]),
+        pdb_user_counts=list(sweep["pdb_user_count_values"]),
+        pdb_ms_values=list(sweep["pdb_ms_values"]),
+        pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
+        include_case=include_case,
+    )
+    cases_to_run = [case for case in all_cases if scene_key(case.__dict__) not in reused_scene_keys]
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []
     raw_summaries: list[dict[str, object]] = []
@@ -303,12 +345,7 @@ def main() -> int:
     for repeat_index in range(int(sweep["repeat_count"])):
         bank_seed = int(sweep["random_seed_base"]) + repeat_index
         bank = build_realization_bank(base_config, scene_bank_spec=scene_bank_spec, bank_seed=bank_seed)
-        for case in systematic_cases(
-            background_user_counts=list(sweep["background_user_count_values"]),
-            pdb_user_counts=list(sweep["pdb_user_count_values"]),
-            pdb_ms_values=list(sweep["pdb_ms_values"]),
-            pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
-        ):
+        for case in cases_to_run:
             scenario_id = (
                 f"bg{case.background_user_count}_pdb{case.pdb_user_count}_"
                 f"d{case.pdb_ms}_k{case.pdb_packet_kb}_seed{repeat_index:02d}"
@@ -358,19 +395,22 @@ def main() -> int:
                 )
             )
 
-    scene_rows = aggregate_scene_rows(paired_rows)
+    merged_per_run_rows = merge_row_sets(existing_rows=existing_per_run_rows, new_rows=per_run_rows)
+    merged_paired_rows = merge_row_sets(existing_rows=existing_paired_rows, new_rows=paired_rows)
+    scene_rows = aggregate_scene_rows(merged_paired_rows)
     region_rows = summarize_regions(scene_rows)
     capacity_rows_95 = capacity_summary_rows(scene_rows, threshold=0.95)
     capacity_rows_90 = capacity_summary_rows(scene_rows, threshold=0.90)
     typical_case_rows = select_typical_case_rows(scene_rows)
     typical_case_detail_rows = build_typical_case_detail_rows(
         scene_rows=scene_rows,
-        per_run_rows=per_run_rows,
+        per_run_rows=merged_per_run_rows,
         baseline_policy=baseline_policy,
         proposed_policy=ours_policy,
     )
     boundary_rows_95 = build_boundary_feasibility_rows(scene_rows, threshold=0.95)
     boundary_rows_90 = build_boundary_feasibility_rows(scene_rows, threshold=0.90)
+    final_output_dir = Path(str(sweep.get("merged_output_dir", output_dir)))
     manifest = {
         **sweep,
         "reference_config": str(config_path),
@@ -381,6 +421,10 @@ def main() -> int:
         },
         "boundary_feasibility_files": ["boundary_feasibility_95.csv", "boundary_feasibility_90.csv"],
         "representative_case_files": ["typical_case_candidates.csv", "typical_case_details.csv"],
+        "reuse_output_dirs": reuse_output_dirs,
+        "reused_scene_point_count": len(reused_scene_keys),
+        "new_scene_point_count": len(cases_to_run),
+        "final_scene_point_count": len(scene_rows),
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -388,15 +432,20 @@ def main() -> int:
     (output_dir / "raw_summaries.json").write_text(json.dumps(raw_summaries, indent=2), encoding="utf-8")
     _write_table(output_dir / "per_run_rows.csv", per_run_rows)
     _write_table(output_dir / "paired_rows.csv", paired_rows)
-    _write_table(output_dir / "scene_summary.csv", scene_rows)
-    _write_table(output_dir / "region_summary.csv", region_rows)
-    _write_table(output_dir / "capacity_summary_95.csv", capacity_rows_95)
-    _write_table(output_dir / "capacity_summary_90.csv", capacity_rows_90)
-    _write_table(output_dir / "boundary_feasibility_95.csv", boundary_rows_95)
-    _write_table(output_dir / "boundary_feasibility_90.csv", boundary_rows_90)
-    _write_table(output_dir / "typical_case_candidates.csv", typical_case_rows)
-    _write_table(output_dir / "typical_case_details.csv", typical_case_detail_rows)
-    (output_dir / "summary_report.md").write_text(
+    final_output_dir.mkdir(parents=True, exist_ok=True)
+    (final_output_dir / "experiment_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (final_output_dir / "raw_summaries.json").write_text(json.dumps(raw_summaries, indent=2), encoding="utf-8")
+    _write_table(final_output_dir / "per_run_rows.csv", merged_per_run_rows)
+    _write_table(final_output_dir / "paired_rows.csv", merged_paired_rows)
+    _write_table(final_output_dir / "scene_summary.csv", scene_rows)
+    _write_table(final_output_dir / "region_summary.csv", region_rows)
+    _write_table(final_output_dir / "capacity_summary_95.csv", capacity_rows_95)
+    _write_table(final_output_dir / "capacity_summary_90.csv", capacity_rows_90)
+    _write_table(final_output_dir / "boundary_feasibility_95.csv", boundary_rows_95)
+    _write_table(final_output_dir / "boundary_feasibility_90.csv", boundary_rows_90)
+    _write_table(final_output_dir / "typical_case_candidates.csv", typical_case_rows)
+    _write_table(final_output_dir / "typical_case_details.csv", typical_case_detail_rows)
+    (final_output_dir / "summary_report.md").write_text(
         _summary_report(
             manifest=manifest,
             scene_rows=scene_rows,
@@ -408,7 +457,7 @@ def main() -> int:
         ),
         encoding="utf-8",
     )
-    print(output_dir / "summary_report.md")
+    print(final_output_dir / "summary_report.md")
     return 0
 
 

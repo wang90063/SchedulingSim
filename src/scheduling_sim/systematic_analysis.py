@@ -414,6 +414,22 @@ def _ci95(values: list[float]) -> float:
     return 1.96 * _stdev(values) / math.sqrt(float(len(values)))
 
 
+_TYPICAL_CASE_DETAIL_METRICS = (
+    "edge_pdb_satisfaction_rate",
+    "center_agg_rate_bps",
+    "center_avg_rate_bps",
+    "prb_utilization",
+    "center_prb_share",
+    "edge_prb_share",
+    "pdb_arrivals_in_window",
+    "pdb_violation_rate",
+    "target_edge_completion_delay_ms",
+    "target_edge_queue_wait_ms",
+    "target_edge_service_time_ms",
+    "edge_backlog_bits",
+)
+
+
 def aggregate_scene_rows(paired_rows: list[dict[str, float | int]]) -> list[dict[str, float | int]]:
     grouped: dict[tuple[int, int, int, int], list[dict[str, float | int]]] = {}
     for row in paired_rows:
@@ -551,6 +567,77 @@ def select_typical_case_rows(scene_rows: list[dict[str, float | int]]) -> list[d
             }
         )
     return deduped
+
+
+def build_typical_case_detail_rows(
+    scene_rows: list[dict[str, float | int]],
+    per_run_rows: list[dict[str, float | int | str]],
+    baseline_policy: str,
+    proposed_policy: str,
+) -> list[dict[str, float | int | str]]:
+    rows: list[dict[str, float | int | str]] = []
+    grouped: dict[tuple[str, int, int, int, int], list[dict[str, float | int | str]]] = {}
+    for row in per_run_rows:
+        key = (
+            str(row["policy"]),
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            int(row["pdb_packet_kb"]),
+        )
+        grouped.setdefault(key, []).append(row)
+
+    for case_row in select_typical_case_rows(scene_rows):
+        background_user_count = int(case_row["background_user_count"])
+        pdb_user_count = int(case_row["pdb_user_count"])
+        pdb_ms = int(case_row["pdb_ms"])
+        pdb_packet_kb = int(case_row["pdb_packet_kb"])
+        case_groups: dict[str, list[dict[str, float | int | str]]] = {}
+        for policy in (baseline_policy, proposed_policy):
+            group = grouped.get((policy, background_user_count, pdb_user_count, pdb_ms, pdb_packet_kb), [])
+            if not group:
+                raise ValueError(
+                    "missing policy "
+                    f"{policy} for representative case "
+                    f"bg={background_user_count} "
+                    f"pdb_users={pdb_user_count} "
+                    f"pdb_ms={pdb_ms} "
+                    f"pdb_kb={pdb_packet_kb}"
+                )
+            case_groups[policy] = group
+        for policy in (baseline_policy, proposed_policy):
+            detail_row: dict[str, float | int | str] = {
+                "case_label": str(case_row["case_label"]),
+                "policy": str(policy),
+                "background_user_count": background_user_count,
+                "pdb_user_count": pdb_user_count,
+                "pdb_ms": pdb_ms,
+                "pdb_packet_kb": pdb_packet_kb,
+            }
+            for metric in _TYPICAL_CASE_DETAIL_METRICS:
+                detail_row[metric] = _mean([float(row[metric]) for row in case_groups[policy]])
+            rows.append(detail_row)
+    return rows
+
+
+def build_boundary_feasibility_rows(
+    scene_rows: list[dict[str, float | int]],
+    threshold: float,
+) -> list[dict[str, float | int]]:
+    rows: list[dict[str, float | int]] = []
+    for row in scene_rows:
+        rows.append(
+            {
+                "background_user_count": int(row["background_user_count"]),
+                "pdb_user_count": int(row["pdb_user_count"]),
+                "pdb_ms": int(row["pdb_ms"]),
+                "pdb_packet_kb": int(row["pdb_packet_kb"]),
+                "threshold": float(threshold),
+                "baseline_feasible": int(float(row["baseline_edge_pdb_satisfaction_rate"]) >= threshold),
+                "proposed_feasible": int(float(row["proposed_edge_pdb_satisfaction_rate"]) >= threshold),
+            }
+        )
+    return rows
 
 
 def capacity_summary_rows(

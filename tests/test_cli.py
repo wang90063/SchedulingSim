@@ -920,8 +920,81 @@ class CliSmokeTests(unittest.TestCase):
             self.assertTrue((output_dir / "region_summary.csv").exists())
             self.assertTrue((output_dir / "capacity_summary_95.csv").exists())
             self.assertTrue((output_dir / "capacity_summary_90.csv").exists())
+            self.assertTrue((output_dir / "boundary_feasibility_95.csv").exists())
+            self.assertTrue((output_dir / "boundary_feasibility_90.csv").exists())
             self.assertTrue((output_dir / "typical_case_candidates.csv").exists())
+            self.assertTrue((output_dir / "typical_case_details.csv").exists())
             self.assertTrue((output_dir / "summary_report.md").exists())
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["reference_config"], str(config_path))
+            self.assertEqual(manifest["scene_bank_counts"], {"medium": 24, "good": 24, "poor": 16})
+            self.assertEqual(
+                manifest["boundary_feasibility_files"],
+                ["boundary_feasibility_95.csv", "boundary_feasibility_90.csv"],
+            )
+            self.assertEqual(
+                manifest["representative_case_files"],
+                ["typical_case_candidates.csv", "typical_case_details.csv"],
+            )
+            with (output_dir / "typical_case_details.csv").open("r", encoding="utf-8", newline="") as handle:
+                detail_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(detail_rows), 2)
+            self.assertEqual(
+                set(detail_rows[0].keys()),
+                {
+                    "case_label",
+                    "policy",
+                    "background_user_count",
+                    "pdb_user_count",
+                    "pdb_ms",
+                    "pdb_packet_kb",
+                    "edge_pdb_satisfaction_rate",
+                    "center_agg_rate_bps",
+                    "center_avg_rate_bps",
+                    "prb_utilization",
+                    "center_prb_share",
+                    "edge_prb_share",
+                    "pdb_arrivals_in_window",
+                    "pdb_violation_rate",
+                    "target_edge_completion_delay_ms",
+                    "target_edge_queue_wait_ms",
+                    "target_edge_service_time_ms",
+                    "edge_backlog_bits",
+                },
+            )
+            self.assertEqual(
+                {row["policy"] for row in detail_rows},
+                {"tail_append", "business_aware_constrained_insert"},
+            )
+            self.assertEqual({row["background_user_count"] for row in detail_rows}, {"24"})
+            self.assertEqual({row["pdb_user_count"] for row in detail_rows}, {"4"})
+            self.assertEqual({row["pdb_ms"] for row in detail_rows}, {"100"})
+            self.assertEqual({row["pdb_packet_kb"] for row in detail_rows}, {"50"})
+            self.assertEqual(len({row["case_label"] for row in detail_rows}), 1)
+            with (output_dir / "boundary_feasibility_95.csv").open("r", encoding="utf-8", newline="") as handle:
+                boundary_rows_95 = list(csv.DictReader(handle))
+            self.assertEqual(len(boundary_rows_95), 1)
+            self.assertEqual(boundary_rows_95[0]["background_user_count"], "24")
+            self.assertEqual(boundary_rows_95[0]["pdb_user_count"], "4")
+            self.assertEqual(boundary_rows_95[0]["pdb_ms"], "100")
+            self.assertEqual(boundary_rows_95[0]["pdb_packet_kb"], "50")
+            self.assertEqual(boundary_rows_95[0]["threshold"], "0.95")
+            self.assertIn(boundary_rows_95[0]["baseline_feasible"], {"0", "1"})
+            self.assertIn(boundary_rows_95[0]["proposed_feasible"], {"0", "1"})
+            summary_report = (output_dir / "summary_report.md").read_text(encoding="utf-8")
+            self.assertIn("## Wireless Environment and Realization Bank", summary_report)
+            self.assertIn("## Business Scan Matrix", summary_report)
+            self.assertIn("## Reporting Semantics", summary_report)
+            self.assertIn("## Panoramic PDB Gain Overview", summary_report)
+            self.assertIn("## Background Cost and Resource Analysis", summary_report)
+            self.assertIn("Scene points evaluated: `1`", summary_report)
+            self.assertIn("Representative cases selected: `1`", summary_report)
+            self.assertIn("`boundary_feasibility_95.csv`", summary_report)
+            self.assertIn("`typical_case_details.csv`", summary_report)
+            self.assertIn("| 24 | 4 | 100 | 50 |", summary_report)
+            self.assertIn("## Feasible Boundary Expansion", summary_report)
+            self.assertIn("## Representative Case Mechanism Analysis", summary_report)
+            self.assertIn("## Summary", summary_report)
 
     def test_systematic_simulation_analysis_runner_supports_hopeless_front_insert_ours_policy(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
@@ -990,6 +1063,11 @@ class CliSmokeTests(unittest.TestCase):
             self.assertTrue((output_dir / "center_throughput_retention.png").exists())
             self.assertTrue((output_dir / "capacity_boundary_95.png").exists())
             self.assertTrue((output_dir / "capacity_boundary_90.png").exists())
+            with (output_dir / "typical_case_candidates.csv").open("r", encoding="utf-8", newline="") as handle:
+                candidate_rows = list(csv.DictReader(handle))
+            self.assertGreaterEqual(len(candidate_rows), 1)
+            for row in candidate_rows:
+                self.assertTrue((output_dir / f"typical_case_{row['case_label']}.png").exists())
 
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

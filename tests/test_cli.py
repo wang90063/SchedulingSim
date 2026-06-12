@@ -1118,6 +1118,23 @@ class CliSmokeTests(unittest.TestCase):
             for row in candidate_rows:
                 self.assertTrue((output_dir / f"typical_case_{row['case_label']}.png").exists())
 
+    def test_expanded_systematic_analysis_config_declares_reuse_and_total_user_filter(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        payload = json.loads(
+            (repo_root / "configs" / "systematic_simulation_analysis_option1_expanded.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        sweep = payload["systematic_analysis"]
+        self.assertEqual(sweep["background_user_count_values"], [16, 24, 32, 36, 40, 48])
+        self.assertEqual(sweep["pdb_user_count_values"], [4, 8, 10, 12, 16])
+        self.assertEqual(sweep["pdb_ms_values"], [100, 200, 300, 500, 600])
+        self.assertEqual(sweep["pdb_packet_kb_values"], [20, 30, 40, 50, 70, 100, 150, 300])
+        self.assertEqual(sweep["repeat_count"], 10)
+        self.assertEqual(sweep["minimum_total_users"], 32)
+        self.assertEqual(sweep["reuse_output_dirs"], ["outputs/systematic_simulation_analysis_option1"])
+        self.assertEqual(sweep["merged_output_dir"], "outputs/systematic_simulation_analysis_option1_expanded")
+
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -10,8 +10,10 @@ from scheduling_sim.simulator import UlSimulator
 from scheduling_sim.systematic_analysis import (
     SceneBankSpec,
     aggregate_scene_rows,
+    build_boundary_feasibility_rows,
     build_realization_bank,
     build_systematic_case_users,
+    build_typical_case_detail_rows,
     capacity_summary_rows,
     paired_metric_row,
     per_run_metric_row,
@@ -44,19 +46,39 @@ def _summary_report(
     manifest: dict[str, object],
     scene_rows: list[dict[str, object]],
     region_rows: list[dict[str, object]],
+    typical_case_rows: list[dict[str, object]],
+    typical_case_detail_rows: list[dict[str, object]],
 ) -> str:
     lines = [
         "# Systematic Simulation Analysis",
         "",
-        "## Scan",
+        "## Wireless Environment and Realization Bank",
         "",
-        f"- background_user_count: `{manifest['background_user_count_values']}`",
-        f"- pdb_user_count: `{manifest['pdb_user_count_values']}`",
-        f"- pdb_ms: `{manifest['pdb_ms_values']}`",
-        f"- pdb_packet_kb: `{manifest['pdb_packet_kb_values']}`",
+        f"- reference_config: `{manifest['reference_config']}`",
+        f"- scene_bank_counts: `{manifest['scene_bank_counts']}`",
+        "",
+        "## Business Scan Matrix",
+        "",
+        f"- background_user_count_values: `{manifest['background_user_count_values']}`",
+        f"- pdb_user_count_values: `{manifest['pdb_user_count_values']}`",
+        f"- pdb_ms_values: `{manifest['pdb_ms_values']}`",
+        f"- pdb_packet_kb_values: `{manifest['pdb_packet_kb_values']}`",
         f"- repeat_count: `{manifest['repeat_count']}`",
         "",
-        "## Region Summary",
+        "## Reporting Semantics",
+        "",
+        "- `scene_summary.csv` aggregates policy-paired results at each business scan point.",
+        "- `capacity_summary_95.csv` and `capacity_summary_90.csv` summarize feasible operating ranges at two thresholds.",
+        f"- boundary_feasibility_files: `{manifest['boundary_feasibility_files']}`",
+        f"- Aggregated scene points: `{len(scene_rows)}`",
+        "",
+        "## Panoramic PDB Gain Overview",
+        "",
+        "| Scene Points |",
+        "| ---: |",
+        f"| {len(scene_rows)} |",
+        "",
+        "## Background Cost and Resource Analysis",
         "",
         "| Region | Scene Points | Share | Win Rate | Mean Delta PDB Satisfaction | Mean Center Retention |",
         "| --- | ---: | ---: | ---: | ---: | ---: |",
@@ -67,25 +89,42 @@ def _summary_report(
             f"{float(row['proposed_win_rate']):.2f} | {float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
             f"{float(row['mean_center_throughput_retention']):.3f} |"
         )
-    lines.extend(["", "## Scene Summary", "", f"- Aggregated scene points: `{len(scene_rows)}`"])
-    typical_rows = select_typical_case_rows(scene_rows)
-    if typical_rows:
+    lines.extend(
+        [
+            "",
+            "## Feasible Boundary Expansion",
+            "",
+            "- Threshold snapshots are exported in `boundary_feasibility_95.csv` and `boundary_feasibility_90.csv`.",
+            "",
+            "## Representative Case Mechanism Analysis",
+            "",
+            f"- Representative detail rows: `{len(typical_case_detail_rows)}`",
+        ]
+    )
+    if typical_case_rows:
         lines.extend(
             [
-                "",
-                "## Typical Cases",
                 "",
                 "| Label | background_user_count | pdb_user_count | pdb_ms | pdb_packet_kb | Mean Delta PDB Satisfaction | Center Retention |",
                 "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
             ]
         )
-        for row in typical_rows:
+        for row in typical_case_rows:
             lines.append(
                 f"| {row['case_label']} | {row['background_user_count']} | {row['pdb_user_count']} | "
                 f"{row['pdb_ms']} | {row['pdb_packet_kb']} | "
                 f"{float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
                 f"{float(row['mean_center_throughput_retention']):.3f} |"
             )
+    lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            f"- Generated `{len(scene_rows)}` scene rows, `{len(region_rows)}` region rows, and "
+            f"`{len(typical_case_rows)}` representative cases.",
+        ]
+    )
     return "\n".join(lines)
 
 
@@ -178,6 +217,14 @@ def main() -> int:
     capacity_rows_95 = capacity_summary_rows(scene_rows, threshold=0.95)
     capacity_rows_90 = capacity_summary_rows(scene_rows, threshold=0.90)
     typical_case_rows = select_typical_case_rows(scene_rows)
+    typical_case_detail_rows = build_typical_case_detail_rows(
+        scene_rows=scene_rows,
+        per_run_rows=per_run_rows,
+        baseline_policy=baseline_policy,
+        proposed_policy=ours_policy,
+    )
+    boundary_rows_95 = build_boundary_feasibility_rows(scene_rows, threshold=0.95)
+    boundary_rows_90 = build_boundary_feasibility_rows(scene_rows, threshold=0.90)
     manifest = {
         **sweep,
         "reference_config": str(config_path),
@@ -186,6 +233,7 @@ def main() -> int:
             "good": scene_bank_spec.good_count,
             "poor": scene_bank_spec.poor_count,
         },
+        "boundary_feasibility_files": ["boundary_feasibility_95.csv", "boundary_feasibility_90.csv"],
     }
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -197,9 +245,18 @@ def main() -> int:
     _write_table(output_dir / "region_summary.csv", region_rows)
     _write_table(output_dir / "capacity_summary_95.csv", capacity_rows_95)
     _write_table(output_dir / "capacity_summary_90.csv", capacity_rows_90)
+    _write_table(output_dir / "boundary_feasibility_95.csv", boundary_rows_95)
+    _write_table(output_dir / "boundary_feasibility_90.csv", boundary_rows_90)
     _write_table(output_dir / "typical_case_candidates.csv", typical_case_rows)
+    _write_table(output_dir / "typical_case_details.csv", typical_case_detail_rows)
     (output_dir / "summary_report.md").write_text(
-        _summary_report(manifest=manifest, scene_rows=scene_rows, region_rows=region_rows),
+        _summary_report(
+            manifest=manifest,
+            scene_rows=scene_rows,
+            region_rows=region_rows,
+            typical_case_rows=typical_case_rows,
+            typical_case_detail_rows=typical_case_detail_rows,
+        ),
         encoding="utf-8",
     )
     print(output_dir / "summary_report.md")

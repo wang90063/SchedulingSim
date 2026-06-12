@@ -921,7 +921,16 @@ class CliSmokeTests(unittest.TestCase):
             self.assertTrue((output_dir / "capacity_summary_95.csv").exists())
             self.assertTrue((output_dir / "capacity_summary_90.csv").exists())
             self.assertTrue((output_dir / "typical_case_candidates.csv").exists())
+            self.assertTrue((output_dir / "typical_case_details.csv").exists())
             self.assertTrue((output_dir / "summary_report.md").exists())
+            summary_report = (output_dir / "summary_report.md").read_text(encoding="utf-8")
+            self.assertIn("## Wireless Environment and Realization Bank", summary_report)
+            self.assertIn("## Business Scan Matrix", summary_report)
+            self.assertIn("## Reporting Semantics", summary_report)
+            self.assertIn("## Panoramic PDB Gain Overview", summary_report)
+            self.assertIn("## Feasible Boundary Expansion", summary_report)
+            self.assertIn("## Representative Case Mechanism Analysis", summary_report)
+            self.assertIn("## Summary", summary_report)
 
     def test_systematic_simulation_analysis_runner_supports_hopeless_front_insert_ours_policy(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

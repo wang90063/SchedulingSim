@@ -1,5 +1,6 @@
 import csv
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -31,7 +32,7 @@ def _scene_value(
             and int(row["pdb_user_count"]) == pdb_user_count
         ):
             return float(row[field_name])
-    return 0.0
+    return math.nan
 
 
 def _grid_value(
@@ -51,7 +52,7 @@ def _grid_value(
             and int(row["pdb_user_count"]) == pdb_user_count
         ):
             return float(row[field_name])
-    return 0.0
+    return math.nan
 
 
 def _heatmap_grid(
@@ -91,6 +92,7 @@ def _heatmap_grid(
                 for pdb_user_count in pdb_user_values
             ]
             image = ax.imshow(matrix, aspect="auto", origin="lower")
+            image.cmap.set_bad(color="#d9d9d9")
             ax.set_title(f"PDB {pdb_ms} ms / {packet_kb} KB")
             ax.set_xticks(range(len(background_values)), labels=[str(value) for value in background_values])
             ax.set_yticks(range(len(pdb_user_values)), labels=[str(value) for value in pdb_user_values])
@@ -151,8 +153,26 @@ def _boundary_plot(
                 ]
                 for pdb_user_count in pdb_user_values
             ]
-            ax.imshow(baseline_matrix, origin="lower", aspect="auto", cmap="Blues", alpha=0.60, vmin=0.0, vmax=1.0)
-            ax.imshow(proposed_matrix, origin="lower", aspect="auto", cmap="Oranges", alpha=0.40, vmin=0.0, vmax=1.0)
+            baseline_image = ax.imshow(
+                baseline_matrix,
+                origin="lower",
+                aspect="auto",
+                cmap="Blues",
+                alpha=0.60,
+                vmin=0.0,
+                vmax=1.0,
+            )
+            baseline_image.cmap.set_bad(color="#d9d9d9")
+            proposed_image = ax.imshow(
+                proposed_matrix,
+                origin="lower",
+                aspect="auto",
+                cmap="Oranges",
+                alpha=0.40,
+                vmin=0.0,
+                vmax=1.0,
+            )
+            proposed_image.cmap.set_bad(color="#d9d9d9")
             ax.set_title(f"PDB {pdb_ms} ms / {packet_kb} KB")
             ax.set_xticks(range(len(background_values)), labels=[str(value) for value in background_values])
             ax.set_yticks(range(len(pdb_user_values)), labels=[str(value) for value in pdb_user_values])

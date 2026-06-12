@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 import math
 import random
+from typing import Callable
 
 from scheduling_sim.config import AppConfig, RadioClassConfig
 from scheduling_sim.models import (
@@ -53,14 +54,18 @@ class SystematicCase:
     pdb_packet_kb: int
 
 
+SceneFilter = Callable[[SystematicCase], bool]
+
+
 def systematic_cases(
     *,
     background_user_counts: list[int],
     pdb_user_counts: list[int],
     pdb_ms_values: list[int],
     pdb_packet_kb_values: list[int],
+    include_case: SceneFilter | None = None,
 ) -> list[SystematicCase]:
-    return [
+    cases = [
         SystematicCase(
             background_user_count=background_user_count,
             pdb_user_count=pdb_user_count,
@@ -72,6 +77,30 @@ def systematic_cases(
         for pdb_ms in pdb_ms_values
         for pdb_packet_kb in pdb_packet_kb_values
     ]
+    if include_case is None:
+        return cases
+    return [case for case in cases if include_case(case)]
+
+
+def scene_key(row: dict[str, float | int | str]) -> tuple[int, int, int, int]:
+    return (
+        int(row["background_user_count"]),
+        int(row["pdb_user_count"]),
+        int(row["pdb_ms"]),
+        int(row["pdb_packet_kb"]),
+    )
+
+
+def scene_key_set(rows: list[dict[str, float | int | str]]) -> set[tuple[int, int, int, int]]:
+    return {scene_key(row) for row in rows}
+
+
+def merge_row_sets(
+    *,
+    existing_rows: list[dict[str, float | int | str]],
+    new_rows: list[dict[str, float | int | str]],
+) -> list[dict[str, float | int | str]]:
+    return [*existing_rows, *new_rows]
 
 
 def _env_view_from_config(base_config: AppConfig, *, seed: int) -> WirelessEnvConfigView:

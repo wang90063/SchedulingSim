@@ -22,9 +22,11 @@ from scheduling_sim.systematic_analysis import (
     build_systematic_case_users,
     build_typical_case_detail_rows,
     capacity_summary_rows,
+    merge_row_sets,
     paired_metric_row,
     partition_region,
     per_run_metric_row,
+    scene_key_set,
     select_typical_case_rows,
     summarize_regions,
     systematic_cases,
@@ -132,6 +134,51 @@ class SystematicAnalysisTests(unittest.TestCase):
             pdb_packet_kb_values=[50, 150, 300],
         )
         self.assertEqual(len(cases), 81)
+
+    def test_systematic_cases_supports_scene_filters(self) -> None:
+        cases = systematic_cases(
+            background_user_counts=[16, 24],
+            pdb_user_counts=[4, 16],
+            pdb_ms_values=[100],
+            pdb_packet_kb_values=[20],
+            include_case=lambda case: (case.background_user_count + case.pdb_user_count) >= 32,
+        )
+        self.assertEqual(
+            [
+                (case.background_user_count, case.pdb_user_count, case.pdb_ms, case.pdb_packet_kb)
+                for case in cases
+            ],
+            [(16, 16, 100, 20), (24, 16, 100, 20)],
+        )
+
+    def test_scene_key_helpers_deduplicate_scene_rows(self) -> None:
+        rows = [
+            {"background_user_count": 24, "pdb_user_count": 4, "pdb_ms": 100, "pdb_packet_kb": 50, "seed": 7},
+            {"background_user_count": 24, "pdb_user_count": 4, "pdb_ms": 100, "pdb_packet_kb": 50, "seed": 8},
+            {"background_user_count": 32, "pdb_user_count": 8, "pdb_ms": 200, "pdb_packet_kb": 70, "seed": 7},
+        ]
+        self.assertEqual(
+            scene_key_set(rows),
+            {
+                (24, 4, 100, 50),
+                (32, 8, 200, 70),
+            },
+        )
+
+    def test_merge_row_sets_appends_without_losing_existing_rows(self) -> None:
+        merged = merge_row_sets(
+            existing_rows=[
+                {"seed": 7, "background_user_count": 24, "pdb_user_count": 4, "pdb_ms": 100, "pdb_packet_kb": 50}
+            ],
+            new_rows=[
+                {"seed": 8, "background_user_count": 32, "pdb_user_count": 8, "pdb_ms": 200, "pdb_packet_kb": 70}
+            ],
+        )
+        self.assertEqual(len(merged), 2)
+        self.assertEqual(
+            [row["background_user_count"] for row in merged],
+            [24, 32],
+        )
 
     def test_per_run_metric_row_keeps_traceability_fields(self) -> None:
         row = per_run_metric_row(

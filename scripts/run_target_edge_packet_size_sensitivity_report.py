@@ -11,7 +11,7 @@ from scheduling_sim.report_rows import build_common_summary_row
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
-SummaryValue = float | int | bool
+SummaryValue = float | int | bool | str
 Summary = dict[str, SummaryValue]
 RowValue = float | int | str | bool | None
 Row = dict[str, RowValue]

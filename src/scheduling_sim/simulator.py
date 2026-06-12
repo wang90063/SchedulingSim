@@ -1,8 +1,18 @@
 from scheduling_sim.models import Packet, UserEquipment
+from scheduling_sim.pdb_arrivals import (
+    build_periodic_pdb_schedule,
+    resolve_analysis_window_ms,
+    resolve_periodic_runtime_ms,
+)
 from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
 from scheduling_sim.ranking import EpfRankingPolicy
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy, TargetOnlyConstrainedInsertPolicy
+from scheduling_sim.reinsert import (
+    ConstrainedInsertPolicy,
+    HopelessFrontInsertPolicy,
+    TailAppendPolicy,
+    TargetOnlyConstrainedInsertPolicy,
+)
 from scheduling_sim.wireless_env import McsEntryView, StableWirelessEnv, WirelessEnvConfigView
 
 
@@ -20,6 +30,8 @@ class UlSimulator:
             self.reinsert = TailAppendPolicy()
         elif config.scheduler.reinsert_policy == "target_only_constrained_insert":
             self.reinsert = TargetOnlyConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
+        elif config.scheduler.reinsert_policy == "hopeless_front_insert":
+            self.reinsert = HopelessFrontInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         else:
             self.reinsert = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         self._wireless_env_injected = wireless_env is not None
@@ -29,6 +41,15 @@ class UlSimulator:
             self.wireless_env.reset(reset_users)
             self._record_radio_states(reset_users)
         self._cycle_served_bits_by_ue = {user.ue_id: 0 for user in self.users}
+        self.analysis_window_ms = resolve_analysis_window_ms(config)
+        self.periodic_pdb_schedule = build_periodic_pdb_schedule(
+            self.users,
+            random_seed=getattr(self.config.simulation, "random_seed", 0),
+            analysis_window_ms=self.analysis_window_ms,
+        )
+        self._next_periodic_arrival_index_by_ue = {ue_id: 0 for ue_id in self.periodic_pdb_schedule}
+        self._next_packet_seq_by_ue = {user.ue_id: 0 for user in self.users}
+        self._target_edge_marked = False
 
     def _build_wireless_env(self):
         radio_section = getattr(self.config, "radio", None)
@@ -44,6 +65,7 @@ class UlSimulator:
                 scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
                 cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
                 carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+                per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
                 noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
                 interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
                 shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
@@ -96,12 +118,32 @@ class UlSimulator:
             elif self.queue.contains(user) and (head_packet is None or head_eligible_cycle > cycle_index):
                 self.queue.deactivate(user)
 
-    def inject_packet(self, user, packet_bits: int, cycle_index: int, slot_name: str, is_target: bool = False) -> None:
-        eligible_cycle = cycle_index + 1 if slot_name.startswith("U") else cycle_index
+    def inject_packet(
+        self,
+        user,
+        packet_bits: int,
+        cycle_index: int,
+        slot_name: str,
+        is_target: bool = False,
+        arrival_time_ms: int | None = None,
+        eligible_cycle_override: int | None = None,
+    ) -> None:
+        eligible_cycle = (
+            eligible_cycle_override
+            if eligible_cycle_override is not None
+            else (cycle_index + 1 if slot_name.startswith("U") else cycle_index)
+        )
         head_before_arrival = user.lc.head_packet
+        packet_sequence = self._next_packet_seq_by_ue[user.ue_id]
+        self._next_packet_seq_by_ue[user.ue_id] = packet_sequence + 1
+        arrival_time = (
+            cycle_index * len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms
+            if arrival_time_ms is None
+            else int(arrival_time_ms)
+        )
         packet = Packet(
-            packet_id=f"{user.ue_id}-{cycle_index}-{slot_name}",
-            arrival_time=cycle_index * 5,
+            packet_id=f"{user.ue_id}-{cycle_index}-{slot_name}-{packet_sequence}",
+            arrival_time=arrival_time,
             size_bits=packet_bits,
             remaining_bits=packet_bits,
             pdb_ms=user.traffic_profile.pdb_ms,
@@ -110,6 +152,13 @@ class UlSimulator:
             is_target=is_target,
         )
         user.lc.packets.append(packet)
+        if hasattr(self.metrics, "record_packet_arrived"):
+            self.metrics.record_packet_arrived(
+                packet_id=packet.packet_id,
+                pdb_ms=packet.pdb_ms,
+                arrival_in_analysis_window=packet.arrival_time < self.analysis_window_ms,
+                user_class="edge" if user.is_edge_user else "center",
+            )
         user.lc.eligible_cycle = (
             eligible_cycle
             if head_before_arrival is None
@@ -161,20 +210,33 @@ class UlSimulator:
             )
         return plan
 
-    def run(self) -> dict[str, float]:
-        total_prb_available = 0
-        total_prb_used = 0
+    def run(self) -> dict[str, float | int | bool | str]:
         self._preload_initial_backlog()
         slots_per_cycle = len(self.config.simulation.tdd_pattern)
-        simulation_duration_ms = (
+        cycle_duration_ms = slots_per_cycle * self.config.simulation.slot_duration_ms
+        observation_window_ms = self.analysis_window_ms
+        base_runtime_ms = (
             self.config.simulation.cycles
-            * len(self.config.simulation.tdd_pattern)
-            * self.config.simulation.slot_duration_ms
+            * cycle_duration_ms
         )
+        simulation_duration_ms = resolve_periodic_runtime_ms(
+            base_runtime_ms=base_runtime_ms,
+            users=self.users,
+            analysis_window_ms=observation_window_ms,
+        )
+        effective_cycles = -(-simulation_duration_ms // cycle_duration_ms)
+        total_prb_available = 0
+        window_total_prb_available = 0
+        total_prb_used = 0
+        window_total_prb_used = 0
         should_stop = False
-        for cycle_index in range(self.config.simulation.cycles):
+        for cycle_index in range(effective_cycles):
+            cycle_start_ms = cycle_index * cycle_duration_ms
+            self._materialize_periodic_arrivals_before_cycle(
+                cycle_index=cycle_index,
+                cycle_start_ms=cycle_start_ms,
+            )
             self.seed_active_queue(cycle_index)
-            cycle_start_ms = cycle_index * len(self.config.simulation.tdd_pattern) * self.config.simulation.slot_duration_ms
             self._refresh_hol(cycle_start_ms)
             self._track_target_control_slot()
             d_plan = self.finish_phase(
@@ -191,15 +253,24 @@ class UlSimulator:
             )
             for u_slot_index in range(3):
                 now_ms = cycle_start_ms + (2 + u_slot_index) * self.config.simulation.slot_duration_ms
+                if now_ms >= simulation_duration_ms:
+                    break
+                in_analysis_window = now_ms < observation_window_ms
                 total_prb_available += self.config.resources.total_prb_per_u_slot
-                total_prb_used += self._execute_u_slot(
+                if in_analysis_window:
+                    window_total_prb_available += self.config.resources.total_prb_per_u_slot
+                used_prbs = self._execute_u_slot(
                     cycle_index=cycle_index,
                     slot_index=u_slot_index,
                     now_ms=now_ms,
                     d_plan=d_plan,
                     s_plan=s_plan,
+                    in_analysis_window=in_analysis_window,
                 )
-                self._inject_u_slot_arrivals(cycle_index, u_slot_index)
+                total_prb_used += used_prbs
+                if in_analysis_window:
+                    window_total_prb_used += used_prbs
+                self._inject_u_slot_arrivals(cycle_index, u_slot_index, now_ms)
                 self.seed_active_queue(cycle_index + 1)
                 if self._should_stop_after_target_edge_finished():
                     simulation_duration_ms = now_ms + self.config.simulation.slot_duration_ms
@@ -209,14 +280,20 @@ class UlSimulator:
             if should_stop:
                 break
         self._refresh_hol(simulation_duration_ms)
-        return self.metrics.build_summary(
+        summary = self.metrics.build_summary(
             total_prb_used=total_prb_used,
             total_prb_available=total_prb_available,
+            window_total_prb_used=window_total_prb_used,
+            window_total_prb_available=window_total_prb_available,
             users=self.users,
             simulation_duration_ms=simulation_duration_ms,
+            analysis_window_ms=observation_window_ms,
             slot_duration_ms=self.config.simulation.slot_duration_ms,
             tdd_pattern=self.config.simulation.tdd_pattern,
         )
+        summary["arrival_mode"] = self.config.traffic.edge.arrival_mode
+        summary["initial_phase_mode"] = self.config.traffic.edge.initial_phase_mode
+        return summary
 
     def _should_stop_after_target_edge_finished(self) -> bool:
         if not getattr(self.config.simulation, "stop_when_target_edge_finished", False):
@@ -225,12 +302,13 @@ class UlSimulator:
         return any(bool(packet.get("is_target")) for packet in completed_packets)
 
     def _preload_initial_backlog(self) -> None:
-        target_edge_marked = False
         for user in self.users:
             profile = user.traffic_profile
             if profile is None:
                 continue
-            is_target = user.is_edge_user and not target_edge_marked
+            if user.is_edge_user and profile.arrival_mode == "periodic_by_pdb":
+                continue
+            is_target = self._should_mark_target(user)
             self.inject_packet(
                 user,
                 profile.packet_bits,
@@ -238,22 +316,55 @@ class UlSimulator:
                 slot_name="D",
                 is_target=is_target,
             )
-            if is_target:
-                target_edge_marked = True
 
-    def _inject_u_slot_arrivals(self, cycle_index: int, u_slot_index: int) -> None:
+    def _inject_u_slot_arrivals(self, cycle_index: int, u_slot_index: int, now_ms: int) -> None:
         global_slot = cycle_index * 3 + u_slot_index
         for user in self.users:
             profile = user.traffic_profile
             if profile is None:
                 continue
             if user.is_edge_user:
+                if profile.arrival_mode == "periodic_by_pdb":
+                    continue
                 if profile.burst_cycle_interval and (cycle_index + 1) % profile.burst_cycle_interval == 0 and u_slot_index == 0:
                     self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
             elif profile.period_slots and global_slot % profile.period_slots == 0:
                 self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
 
-    def _execute_u_slot(self, cycle_index: int, slot_index: int, now_ms: int, d_plan, s_plan) -> int:
+    def _should_mark_target(self, user: UserEquipment) -> bool:
+        if not user.is_edge_user or self._target_edge_marked:
+            return False
+        self._target_edge_marked = True
+        return True
+
+    def _materialize_periodic_arrivals_before_cycle(self, cycle_index: int, cycle_start_ms: int) -> None:
+        for user in self.users:
+            arrival_schedule = self.periodic_pdb_schedule.get(user.ue_id)
+            if not arrival_schedule:
+                continue
+            next_index = self._next_periodic_arrival_index_by_ue[user.ue_id]
+            while next_index < len(arrival_schedule) and arrival_schedule[next_index] <= cycle_start_ms:
+                self.inject_packet(
+                    user,
+                    user.traffic_profile.packet_bits,
+                    cycle_index=cycle_index,
+                    slot_name="D",
+                    is_target=self._should_mark_target(user),
+                    arrival_time_ms=arrival_schedule[next_index],
+                    eligible_cycle_override=cycle_index,
+                )
+                next_index += 1
+            self._next_periodic_arrival_index_by_ue[user.ue_id] = next_index
+
+    def _execute_u_slot(
+        self,
+        cycle_index: int,
+        slot_index: int,
+        now_ms: int,
+        d_plan,
+        s_plan,
+        in_analysis_window: bool = True,
+    ) -> int:
         grant_bits_by_user, prb_count_by_user = self._merge_u_slot_grants(slot_index, d_plan, s_plan)
         self._track_target_u_slot_wait(grant_bits_by_user)
         for user in self.users:
@@ -263,10 +374,16 @@ class UlSimulator:
                 self.metrics.record_prb_used(
                     user_class="edge" if user.is_edge_user else "center",
                     prb_count=prb_count,
+                    in_analysis_window=in_analysis_window,
                 )
             if bits_budget <= 0:
                 continue
-            self._consume_user_bits(user, bits_budget, now_ms)
+            self._consume_user_bits(
+                user,
+                bits_budget,
+                now_ms,
+                in_analysis_window=in_analysis_window,
+            )
         self._refresh_hol(now_ms)
         self.seed_active_queue(cycle_index)
         return sum(prb_count_by_user.values())
@@ -323,7 +440,13 @@ class UlSimulator:
             grant_bits_by_user[user.ue_id] = cap * bits_per_prb
         return grant_bits_by_user, prb_count_by_user
 
-    def _consume_user_bits(self, user: UserEquipment, bits_budget: int, now_ms: int) -> None:
+    def _consume_user_bits(
+        self,
+        user: UserEquipment,
+        bits_budget: int,
+        now_ms: int,
+        in_analysis_window: bool = True,
+    ) -> None:
         remaining_budget = bits_budget
         user_class = "edge" if user.is_edge_user else "center"
         while remaining_budget > 0 and user.lc.head_packet is not None:
@@ -341,6 +464,7 @@ class UlSimulator:
                     user_class=user_class,
                     bits_sent=bits_sent,
                     ue_id=user.ue_id,
+                    in_analysis_window=in_analysis_window,
                 )
             if bits_sent > 0:
                 self._record_cycle_service(user.ue_id, bits_sent)
@@ -358,6 +482,7 @@ class UlSimulator:
                     user_class=user_class,
                     ue_id=user.ue_id,
                     is_target=completed.is_target,
+                    arrival_in_analysis_window=completed.arrival_time < self.analysis_window_ms,
                     first_service_time=completed.first_service_time,
                     service_slot_count=completed.service_slot_count,
                     control_slot_count_while_pending=completed.control_slot_count_while_pending,

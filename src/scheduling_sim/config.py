@@ -14,6 +14,8 @@ class TrafficConfig:
     period_slots: int | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
+    arrival_mode: str = "single_burst"
+    initial_phase_mode: str = "none"
 
 
 @dataclass(frozen=True)
@@ -28,6 +30,7 @@ class SimulationConfig:
     slot_duration_ms: int
     tdd_pattern: str
     random_seed: int = 0
+    analysis_window_ms: int | None = None
     stop_when_target_edge_finished: bool = False
     deadline_guard_ms: int = 0
     avg_rate_ewma_beta: float = 0.9
@@ -51,6 +54,7 @@ class WirelessEnvConfig:
     scenario_type: str = "legacy"
     cell_radius_m: float = 0.0
     carrier_frequency_ghz: float = 0.0
+    per_prb_tx_power_dbm: float = 5.0
     noise_figure_db: float = 0.0
     interference_margin_db: float = 0.0
     shadow_std_db: float = 0.0
@@ -213,6 +217,7 @@ def _load_wireless_env_config(
         scenario_type=str(payload.get("scenario_type", "legacy")),
         cell_radius_m=float(payload.get("cell_radius_m", 0.0)),
         carrier_frequency_ghz=float(payload.get("carrier_frequency_ghz", 0.0)),
+        per_prb_tx_power_dbm=float(payload.get("per_prb_tx_power_dbm", 5.0)),
         noise_figure_db=float(payload.get("noise_figure_db", 0.0)),
         interference_margin_db=float(payload.get("interference_margin_db", 0.0)),
         shadow_std_db=float(payload.get("shadow_std_db", 0.0)),

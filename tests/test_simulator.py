@@ -21,7 +21,7 @@ from scheduling_sim.config import (
 from scheduling_sim.metrics import MetricsCollector
 from scheduling_sim.models import CurrentRadioState, LogicalChannel, Packet, PhasePlan, RadioProfile, TrafficProfile, UserEquipment
 from scheduling_sim.reporting import write_report
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TargetOnlyConstrainedInsertPolicy
+from scheduling_sim.reinsert import ConstrainedInsertPolicy, HopelessFrontInsertPolicy, TargetOnlyConstrainedInsertPolicy
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
@@ -89,6 +89,75 @@ class ScenarioFactoryTests(unittest.TestCase):
         self.assertGreaterEqual(edge_user.radio_profile.distance_to_bs_m, 425.0)
         self.assertLessEqual(edge_user.radio_profile.distance_to_bs_m, 500.0)
 
+    def test_scenario_factory_carries_periodic_pdb_metadata(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=2,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                random_seed=7,
+                analysis_window_ms=10000,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=20, max_ue_per_slot=4),
+            traffic=TrafficSection(
+                center=TrafficConfig(
+                    count=1,
+                    period_slots=6,
+                    packet_bits=960,
+                    pdb_ms=None,
+                    gbr_bps=7000,
+                ),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="uniform_0_to_pdb",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=20),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=20),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = next(user for user in users if user.is_edge_user)
+        self.assertEqual(edge_user.traffic_profile.arrival_mode, "periodic_by_pdb")
+        self.assertEqual(edge_user.traffic_profile.initial_phase_mode, "uniform_0_to_pdb")
+        self.assertEqual(edge_user.traffic_profile.pdb_ms, 200)
+
+    def test_scenario_factory_defaults_periodic_pdb_metadata_for_legacy_configs(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=2, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=20, max_ue_per_slot=4),
+            traffic=TrafficSection(
+                center=TrafficConfig(
+                    count=1,
+                    period_slots=6,
+                    packet_bits=960,
+                    pdb_ms=None,
+                    gbr_bps=7000,
+                ),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=20),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=20),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = next(user for user in users if user.is_edge_user)
+        self.assertEqual(edge_user.traffic_profile.arrival_mode, "single_burst")
+        self.assertEqual(edge_user.traffic_profile.initial_phase_mode, "none")
+
 class DummyMetrics:
     def build_summary(
         self,
@@ -96,9 +165,12 @@ class DummyMetrics:
         total_prb_available: int,
         users=None,
         simulation_duration_ms: int = 0,
+        analysis_window_ms: int = 0,
+        window_total_prb_used: int = 0,
+        window_total_prb_available: int = 0,
         slot_duration_ms: int = 1,
         tdd_pattern: str = "DSUUU",
-    ) -> dict[str, float]:
+    ) -> dict[str, float | int | bool | str]:
         return {
             "total_prb_used": float(total_prb_used),
             "total_prb_available": float(total_prb_available),
@@ -218,6 +290,243 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator = UlSimulator(config, users, DummyMetrics())
         simulator.inject_packet(users[0], packet_bits=50, cycle_index=0, slot_name="U1")
         self.assertEqual(users[0].lc.eligible_cycle, 1)
+
+    def test_periodic_mode_does_not_preload_single_burst_packet(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._preload_initial_backlog()
+
+        self.assertEqual(edge_user.lc.packets, [])
+
+    def test_u_slot_arrivals_do_not_materialize_periodic_edge_packets_mid_cycle(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=0, u_slot_index=0, now_ms=2)
+
+        self.assertEqual(edge_user.lc.packets, [])
+
+    def test_periodic_cycle_start_arrivals_are_eligible_in_same_cycle(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=1,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                random_seed=7,
+                analysis_window_ms=5,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=1, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=10,
+                    pdb_ms=5,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+
+        summary = UlSimulator(config, users, MetricsCollector()).run()
+
+        self.assertTrue(summary["target_edge_finished"])
+        self.assertEqual(summary["target_edge_time_to_first_service_ms"], 2.0)
+        self.assertEqual(summary["target_edge_completion_delay_ms"], 3.0)
+
+    def test_periodic_mode_uses_analysis_window_for_prb_and_extends_runtime_for_tail(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=2,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                random_seed=7,
+                analysis_window_ms=12,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=1, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=10,
+                    pdb_ms=5,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+
+        summary = UlSimulator(config, users, MetricsCollector()).run()
+
+        self.assertEqual(summary["analysis_window_ms"], 12.0)
+        self.assertEqual(summary["simulation_duration_ms"], 17.0)
+        self.assertEqual(summary["completed_packets"], 3)
+        self.assertEqual(summary["edge_total_bits"], 20.0)
+        self.assertEqual(summary["throughput_bits"], 20)
+        self.assertEqual(summary["edge_used_prb"], 4.0)
+        self.assertEqual(summary["prb_utilization"], 4.0 / 6.0)
+
+    def test_periodic_mode_excludes_post_window_arrivals_from_satisfaction_denominator(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=5,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+                random_seed=7,
+                analysis_window_ms=12,
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=1, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=10,
+                    pdb_ms=10,
+                    arrival_mode="periodic_by_pdb",
+                    initial_phase_mode="none",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=1),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+
+        summary = UlSimulator(config, users, MetricsCollector()).run()
+
+        self.assertEqual(summary["pdb_arrivals_in_window"], 2)
+        self.assertEqual(summary["pdb_packets_completed_in_window_set"], 2)
+        self.assertEqual(summary["edge_pdb_satisfaction_rate"], 1.0)
+
+    def test_run_summary_includes_default_arrival_metadata_for_legacy_configs(self) -> None:
+        config = self._legacy_config()
+        users = ScenarioFactory(config).build_users()
+
+        summary = UlSimulator(config, users, DummyMetrics()).run()
+
+        self.assertEqual(summary["arrival_mode"], "single_burst")
+        self.assertEqual(summary["initial_phase_mode"], "none")
+
+    def test_u_slot_arrivals_preserve_center_periodic_injection(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=1, period_slots=2, packet_bits=30, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=0,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        center_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=0, u_slot_index=0, now_ms=2)
+
+        self.assertEqual(len(center_user.lc.packets), 1)
+        self.assertEqual(center_user.lc.head_packet.arrival_time, 0)
+        self.assertEqual(center_user.lc.head_packet.eligible_cycle, 1)
+
+    def test_u_slot_arrivals_preserve_legacy_edge_burst_injection(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(cycles=2, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=2),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=0, period_slots=1, packet_bits=0, pdb_ms=30),
+                edge=TrafficConfig(
+                    count=1,
+                    packet_bits=80000,
+                    pdb_ms=200,
+                    burst_cycle_interval=2,
+                    arrival_mode="single_burst",
+                ),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/test", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        edge_user = users[0]
+        simulator = UlSimulator(config, users, DummyMetrics())
+
+        simulator._inject_u_slot_arrivals(cycle_index=1, u_slot_index=0, now_ms=7)
+
+        self.assertEqual(len(edge_user.lc.packets), 1)
+        self.assertEqual(edge_user.lc.head_packet.arrival_time, 5)
+        self.assertEqual(edge_user.lc.head_packet.eligible_cycle, 2)
+        self.assertFalse(edge_user.lc.head_packet.is_target)
 
     def test_u_slot_arrival_does_not_make_existing_hol_ineligible(self) -> None:
         config = self._legacy_config(center_count=1, max_ue_per_slot=1)
@@ -646,6 +955,20 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator = UlSimulator(config, users, DummyMetrics())
         self.assertIsInstance(simulator.reinsert, ConstrainedInsertPolicy)
 
+    def test_supports_hopeless_front_insert_policy(self) -> None:
+        config = self._legacy_config(center_count=1, max_ue_per_slot=1)
+        config = AppConfig(
+            simulation=config.simulation,
+            resources=config.resources,
+            traffic=config.traffic,
+            radio=config.radio,
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="hopeless_front_insert"),
+            report=config.report,
+        )
+        users = ScenarioFactory(config).build_users()
+        simulator = UlSimulator(config, users, DummyMetrics())
+        self.assertIsInstance(simulator.reinsert, HopelessFrontInsertPolicy)
+
 
 class MetricsTests(unittest.TestCase):
     def _make_user(
@@ -841,6 +1164,35 @@ class MetricsTests(unittest.TestCase):
         self.assertEqual(summary["center_bits_per_used_prb"], 40.0)
         self.assertEqual(summary["edge_bits_per_used_prb"], 80.0 / 3.0)
 
+    def test_target_edge_total_bits_tracks_target_packet_only(self) -> None:
+        collector = MetricsCollector()
+        collector.record_bits_served(user_class="edge", bits_sent=80, ue_id="edge-0")
+        collector.record_bits_served(user_class="edge", bits_sent=80, ue_id="edge-0")
+        collector.record_packet_completed(
+            packet_id="edge-0-target",
+            completion_time=10,
+            arrival_time=0,
+            pdb_ms=15,
+            bits_sent=80,
+            user_class="edge",
+            ue_id="edge-0",
+            is_target=True,
+            first_service_time=2,
+            service_slot_count=1,
+            control_slot_count_while_pending=2,
+            waiting_u_slot_count_before_first_service=0,
+            waiting_u_slot_count_after_first_service=0,
+        )
+        summary = collector.build_summary(
+            total_prb_used=8,
+            total_prb_available=10,
+            users=[self._make_user("edge-0", is_edge_user=True)],
+            simulation_duration_ms=10,
+            slot_duration_ms=1,
+        )
+        self.assertEqual(summary["target_edge_total_bits"], 80.0)
+        self.assertEqual(summary["target_edge_rate_bps"], 8000.0)
+
     def test_metrics_ignore_packets_without_pdb_in_deadline_kpis(self) -> None:
         collector = MetricsCollector()
         collector.record_packet_completed(
@@ -854,6 +1206,55 @@ class MetricsTests(unittest.TestCase):
         summary = collector.build_summary(total_prb_used=1, total_prb_available=1, users=[])
         self.assertEqual(summary["pdb_violation_rate"], 0.0)
         self.assertEqual(summary["edge_pdb_satisfaction_rate"], 0.0)
+
+    def test_periodic_mode_excludes_post_window_arrivals_from_satisfaction_denominator(self) -> None:
+        collector = MetricsCollector()
+        collector.record_packet_completed(
+            packet_id="edge-window",
+            completion_time=15,
+            arrival_time=10,
+            pdb_ms=5,
+            bits_sent=80,
+            user_class="edge",
+            ue_id="edge-0",
+        )
+        collector.record_packet_completed(
+            packet_id="edge-post-window",
+            completion_time=17,
+            arrival_time=15,
+            pdb_ms=1,
+            bits_sent=80,
+            user_class="edge",
+            ue_id="edge-0",
+            arrival_in_analysis_window=False,
+        )
+
+        summary = collector.build_summary(
+            total_prb_used=3,
+            total_prb_available=6,
+            users=[],
+            simulation_duration_ms=20,
+            analysis_window_ms=12,
+        )
+
+        self.assertEqual(summary["pdb_arrivals_in_window"], 1)
+        self.assertEqual(summary["pdb_packets_completed_in_window_set"], 1)
+        self.assertEqual(summary["edge_pdb_satisfaction_rate"], 1.0)
+        self.assertEqual(summary["pdb_violation_rate"], 0.0)
+
+    def test_periodic_mode_counts_unfinished_in_window_pdb_packets_as_violations(self) -> None:
+        collector = MetricsCollector()
+        pending_edge_user = self._make_user("edge-pending", is_edge_user=True, hol_ms=20, pdb_ms=5)
+
+        summary = collector.build_summary(
+            total_prb_used=0,
+            total_prb_available=1,
+            users=[pending_edge_user],
+            simulation_duration_ms=20,
+            analysis_window_ms=12,
+        )
+
+        self.assertEqual(summary["pdb_violation_rate"], 1.0)
 
 
 if __name__ == "__main__":

@@ -123,3 +123,39 @@ class TargetOnlyConstrainedInsertPolicy:
             current_phase=current_phase,
             max_ue_per_slot=max_ue_per_slot,
         )
+
+
+class HopelessFrontInsertPolicy(ConstrainedInsertPolicy):
+    def apply(
+        self,
+        queue: ActiveQueue,
+        ue: UserEquipment,
+        queue_wait_size: int,
+        service_bits_per_decision: int,
+        now_ms: int,
+        current_phase: str,
+        max_ue_per_slot: int,
+    ) -> None:
+        tail_index = max(queue_wait_size - 1, 0)
+        if self._position_is_safe(
+            ue,
+            queue_index=tail_index,
+            service_bits_per_decision=service_bits_per_decision,
+            now_ms=now_ms,
+            current_phase=current_phase,
+            max_ue_per_slot=max_ue_per_slot,
+        ):
+            queue.append_tail(ue)
+            return
+        for queue_index in range(tail_index, -1, -1):
+            if self._position_is_safe(
+                ue,
+                queue_index=queue_index,
+                service_bits_per_decision=service_bits_per_decision,
+                now_ms=now_ms,
+                current_phase=current_phase,
+                max_ue_per_slot=max_ue_per_slot,
+            ):
+                queue.insert_at(queue_index, ue)
+                return
+        queue.insert_at(0, ue)

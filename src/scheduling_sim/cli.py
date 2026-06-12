@@ -21,6 +21,7 @@ def main() -> int:
             "constrained_insert",
             "target_only_constrained_insert",
             "business_aware_constrained_insert",
+            "hopeless_front_insert",
         ],
     )
     args = parser.parse_args()

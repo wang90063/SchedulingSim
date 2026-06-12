@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+import math
 import random
 
 from scheduling_sim.config import AppConfig, RadioClassConfig
@@ -81,6 +82,7 @@ def _env_view_from_config(base_config: AppConfig, *, seed: int) -> WirelessEnvCo
         scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
         cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
         carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+        per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
         noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
         interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
         shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
@@ -327,3 +329,292 @@ def build_systematic_case_users(
         for template in bank.poor_users[:pdb_user_count]
     ]
     return [*background_users, *pdb_users]
+
+
+def per_run_metric_row(
+    *,
+    scenario_id: str,
+    seed: int,
+    policy: str,
+    case: SystematicCase,
+    summary: dict[str, float],
+) -> dict[str, float | int | str]:
+    return {
+        "seed": int(seed),
+        "scenario_id": scenario_id,
+        "policy": str(policy),
+        "background_user_count": int(case.background_user_count),
+        "pdb_user_count": int(case.pdb_user_count),
+        "pdb_ms": int(case.pdb_ms),
+        "pdb_packet_kb": int(case.pdb_packet_kb),
+        "edge_pdb_satisfaction_rate": float(summary["edge_pdb_satisfaction_rate"]),
+        "center_agg_rate_bps": float(summary["center_agg_rate_bps"]),
+        "center_avg_rate_bps": float(summary["center_avg_rate_bps"]),
+        "prb_utilization": float(summary["prb_utilization"]),
+        "center_prb_share": float(summary["center_prb_share"]),
+        "edge_prb_share": float(summary["edge_prb_share"]),
+        "pdb_arrivals_in_window": float(summary.get("pdb_arrivals_in_window", 0.0)),
+        "pdb_violation_rate": float(summary["pdb_violation_rate"]),
+        "target_edge_completion_delay_ms": float(summary["target_edge_completion_delay_ms"]),
+        "target_edge_queue_wait_ms": float(summary["target_edge_queue_wait_ms"]),
+        "target_edge_service_time_ms": float(summary["target_edge_service_time_ms"]),
+        "edge_backlog_bits": float(summary["edge_backlog_bits"]),
+    }
+
+
+def paired_metric_row(
+    *,
+    case: SystematicCase,
+    seed: int,
+    baseline_summary: dict[str, float],
+    proposed_summary: dict[str, float],
+) -> dict[str, float | int]:
+    baseline_center_rate = float(baseline_summary["center_agg_rate_bps"])
+    proposed_center_rate = float(proposed_summary["center_agg_rate_bps"])
+    delta_pdb_satisfaction_rate = round(
+        float(proposed_summary["edge_pdb_satisfaction_rate"])
+        - float(baseline_summary["edge_pdb_satisfaction_rate"]),
+        12,
+    )
+    center_throughput_retention = round(
+        1.0 if baseline_center_rate == 0.0 else proposed_center_rate / baseline_center_rate,
+        12,
+    )
+    return {
+        "seed": int(seed),
+        "background_user_count": int(case.background_user_count),
+        "pdb_user_count": int(case.pdb_user_count),
+        "pdb_ms": int(case.pdb_ms),
+        "pdb_packet_kb": int(case.pdb_packet_kb),
+        "baseline_edge_pdb_satisfaction_rate": float(baseline_summary["edge_pdb_satisfaction_rate"]),
+        "proposed_edge_pdb_satisfaction_rate": float(proposed_summary["edge_pdb_satisfaction_rate"]),
+        "delta_pdb_satisfaction_rate": delta_pdb_satisfaction_rate,
+        "center_throughput_retention": center_throughput_retention,
+        "delta_prb_utilization": float(proposed_summary["prb_utilization"]) - float(baseline_summary["prb_utilization"]),
+        "delta_center_prb_share": float(proposed_summary["center_prb_share"]) - float(baseline_summary["center_prb_share"]),
+        "delta_edge_prb_share": float(proposed_summary["edge_prb_share"]) - float(baseline_summary["edge_prb_share"]),
+    }
+
+
+def _mean(values: list[float]) -> float:
+    return sum(values) / float(len(values)) if values else 0.0
+
+
+def _stdev(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    mean_value = _mean(values)
+    variance = sum((value - mean_value) ** 2 for value in values) / float(len(values) - 1)
+    return math.sqrt(variance)
+
+
+def _ci95(values: list[float]) -> float:
+    if len(values) <= 1:
+        return 0.0
+    return 1.96 * _stdev(values) / math.sqrt(float(len(values)))
+
+
+def aggregate_scene_rows(paired_rows: list[dict[str, float | int]]) -> list[dict[str, float | int]]:
+    grouped: dict[tuple[int, int, int, int], list[dict[str, float | int]]] = {}
+    for row in paired_rows:
+        key = (
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            int(row["pdb_packet_kb"]),
+        )
+        grouped.setdefault(key, []).append(row)
+    aggregated: list[dict[str, float | int]] = []
+    for key, group in sorted(grouped.items()):
+        delta_values = [float(row["delta_pdb_satisfaction_rate"]) for row in group]
+        retention_values = [float(row["center_throughput_retention"]) for row in group]
+        delta_prb_values = [float(row["delta_prb_utilization"]) for row in group]
+        delta_center_share_values = [float(row["delta_center_prb_share"]) for row in group]
+        delta_edge_share_values = [float(row["delta_edge_prb_share"]) for row in group]
+        baseline_values = [float(row["baseline_edge_pdb_satisfaction_rate"]) for row in group]
+        proposed_values = [float(row["proposed_edge_pdb_satisfaction_rate"]) for row in group]
+        aggregated.append(
+            {
+                "background_user_count": key[0],
+                "pdb_user_count": key[1],
+                "pdb_ms": key[2],
+                "pdb_packet_kb": key[3],
+                "repeat_count": len(group),
+                "baseline_edge_pdb_satisfaction_rate": _mean(baseline_values),
+                "proposed_edge_pdb_satisfaction_rate": _mean(proposed_values),
+                "mean_delta_pdb_satisfaction_rate": _mean(delta_values),
+                "std_delta_pdb_satisfaction_rate": _stdev(delta_values),
+                "ci95_delta_pdb_satisfaction_rate": _ci95(delta_values),
+                "mean_center_throughput_retention": _mean(retention_values),
+                "std_center_throughput_retention": _stdev(retention_values),
+                "ci95_center_throughput_retention": _ci95(retention_values),
+                "mean_delta_prb_utilization": _mean(delta_prb_values),
+                "mean_delta_center_prb_share": _mean(delta_center_share_values),
+                "mean_delta_edge_prb_share": _mean(delta_edge_share_values),
+            }
+        )
+    return aggregated
+
+
+def partition_region(baseline_satisfaction: float) -> str:
+    if baseline_satisfaction >= 0.95:
+        return "feasible"
+    if baseline_satisfaction >= 0.50:
+        return "critical"
+    return "overloaded"
+
+
+def summarize_regions(scene_rows: list[dict[str, float | int]]) -> list[dict[str, float | int | str]]:
+    total_scene_points = len(scene_rows)
+    grouped: dict[str, list[dict[str, float | int]]] = {}
+    for row in scene_rows:
+        grouped.setdefault(partition_region(float(row["baseline_edge_pdb_satisfaction_rate"])), []).append(row)
+    summaries: list[dict[str, float | int | str]] = []
+    for region, group in sorted(grouped.items()):
+        summaries.append(
+            {
+                "region": region,
+                "scene_point_count": len(group),
+                "scene_point_share": 0.0 if total_scene_points == 0 else len(group) / float(total_scene_points),
+                "proposed_win_rate": (
+                    sum(1 for row in group if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0) / float(len(group))
+                ),
+                "mean_delta_pdb_satisfaction_rate": _mean(
+                    [float(row["mean_delta_pdb_satisfaction_rate"]) for row in group]
+                ),
+                "mean_center_throughput_retention": _mean(
+                    [float(row["mean_center_throughput_retention"]) for row in group]
+                ),
+                "mean_delta_prb_utilization": _mean([float(row["mean_delta_prb_utilization"]) for row in group]),
+                "mean_delta_center_prb_share": _mean([float(row["mean_delta_center_prb_share"]) for row in group]),
+                "mean_delta_edge_prb_share": _mean([float(row["mean_delta_edge_prb_share"]) for row in group]),
+            }
+        )
+    return summaries
+
+
+def select_typical_case_rows(scene_rows: list[dict[str, float | int]]) -> list[dict[str, float | int | str]]:
+    if not scene_rows:
+        return []
+
+    selections: list[tuple[str, dict[str, float | int]]] = []
+    easy_rows = [
+        row
+        for row in scene_rows
+        if float(row["baseline_edge_pdb_satisfaction_rate"]) >= 0.95
+        and float(row["proposed_edge_pdb_satisfaction_rate"]) >= 0.95
+    ]
+    critical_rows = [
+        row for row in scene_rows if 0.50 <= float(row["baseline_edge_pdb_satisfaction_rate"]) < 0.95
+    ]
+    overloaded_rows = [
+        row for row in scene_rows if float(row["baseline_edge_pdb_satisfaction_rate"]) < 0.50
+    ]
+    positive_gain_rows = [
+        row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0
+    ]
+
+    if easy_rows:
+        selections.append(("easy", max(easy_rows, key=lambda row: float(row["baseline_edge_pdb_satisfaction_rate"]))))
+    if critical_rows:
+        selections.append(("critical", max(critical_rows, key=lambda row: float(row["mean_delta_pdb_satisfaction_rate"]))))
+    if overloaded_rows:
+        selections.append(
+            ("overloaded", max(overloaded_rows, key=lambda row: float(row["mean_delta_pdb_satisfaction_rate"])))
+        )
+    if positive_gain_rows:
+        selections.append(("high_cost", min(positive_gain_rows, key=lambda row: float(row["mean_center_throughput_retention"]))))
+
+    deduped: list[dict[str, float | int | str]] = []
+    seen_keys: set[tuple[int, int, int, int]] = set()
+    for label, row in selections:
+        key = (
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            int(row["pdb_packet_kb"]),
+        )
+        if key in seen_keys:
+            continue
+        seen_keys.add(key)
+        deduped.append(
+            {
+                "case_label": label,
+                "background_user_count": int(row["background_user_count"]),
+                "pdb_user_count": int(row["pdb_user_count"]),
+                "pdb_ms": int(row["pdb_ms"]),
+                "pdb_packet_kb": int(row["pdb_packet_kb"]),
+                "baseline_edge_pdb_satisfaction_rate": float(row["baseline_edge_pdb_satisfaction_rate"]),
+                "proposed_edge_pdb_satisfaction_rate": float(row["proposed_edge_pdb_satisfaction_rate"]),
+                "mean_delta_pdb_satisfaction_rate": float(row["mean_delta_pdb_satisfaction_rate"]),
+                "mean_center_throughput_retention": float(row["mean_center_throughput_retention"]),
+            }
+        )
+    return deduped
+
+
+def capacity_summary_rows(
+    scene_rows: list[dict[str, float | int]],
+    *,
+    threshold: float,
+) -> list[dict[str, float | int | str]]:
+    rows: list[dict[str, float | int | str]] = []
+    by_background: dict[tuple[int, int, int], list[dict[str, float | int]]] = {}
+    by_pdb_users: dict[tuple[int, int, int], list[dict[str, float | int]]] = {}
+    for row in scene_rows:
+        by_background.setdefault(
+            (int(row["background_user_count"]), int(row["pdb_ms"]), int(row["pdb_packet_kb"])),
+            [],
+        ).append(row)
+        by_pdb_users.setdefault(
+            (int(row["pdb_user_count"]), int(row["pdb_ms"]), int(row["pdb_packet_kb"])),
+            [],
+        ).append(row)
+
+    for (background_user_count, pdb_ms, pdb_packet_kb), group in sorted(by_background.items()):
+        baseline_max = max(
+            [int(row["pdb_user_count"]) for row in group if float(row["baseline_edge_pdb_satisfaction_rate"]) >= threshold],
+            default=0,
+        )
+        proposed_max = max(
+            [int(row["pdb_user_count"]) for row in group if float(row["proposed_edge_pdb_satisfaction_rate"]) >= threshold],
+            default=0,
+        )
+        rows.append(
+            {
+                "dimension": "fixed_background_user_count",
+                "background_user_count": background_user_count,
+                "pdb_user_count": "",
+                "pdb_ms": pdb_ms,
+                "pdb_packet_kb": pdb_packet_kb,
+                "threshold": float(threshold),
+                "baseline_max_pdb_user_count": baseline_max,
+                "proposed_max_pdb_user_count": proposed_max,
+                "capacity_gain_pdb_users": proposed_max - baseline_max,
+            }
+        )
+
+    for (pdb_user_count, pdb_ms, pdb_packet_kb), group in sorted(by_pdb_users.items()):
+        baseline_max = max(
+            [int(row["background_user_count"]) for row in group if float(row["baseline_edge_pdb_satisfaction_rate"]) >= threshold],
+            default=0,
+        )
+        proposed_max = max(
+            [int(row["background_user_count"]) for row in group if float(row["proposed_edge_pdb_satisfaction_rate"]) >= threshold],
+            default=0,
+        )
+        rows.append(
+            {
+                "dimension": "fixed_pdb_user_count",
+                "background_user_count": "",
+                "pdb_user_count": pdb_user_count,
+                "pdb_ms": pdb_ms,
+                "pdb_packet_kb": pdb_packet_kb,
+                "threshold": float(threshold),
+                "baseline_max_background_user_count": baseline_max,
+                "proposed_max_background_user_count": proposed_max,
+                "capacity_gain_background_users": proposed_max - baseline_max,
+            }
+        )
+
+    return rows

@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 
 
-def write_report(output_dir: str, summary: dict[str, float]) -> Path:
+def write_report(output_dir: str, summary: dict[str, float | int | bool | str]) -> Path:
     path = Path(output_dir)
     path.mkdir(parents=True, exist_ok=True)
     report_path = path / "report.json"

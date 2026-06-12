@@ -92,6 +92,7 @@ class ConfigLoaderTests(unittest.TestCase):
                     "scenario_type": "uma",
                     "cell_radius_m": 500,
                     "carrier_frequency_ghz": 3.5,
+                    "per_prb_tx_power_dbm": 5.0,
                     "noise_figure_db": 7.0,
                     "interference_margin_db": 3.0,
                     "shadow_std_db": 4.0,
@@ -117,6 +118,7 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.traffic.center.gbr_bps, 0.0)
         self.assertEqual(config.radio.environment.scenario_type, "uma")
         self.assertEqual(config.radio.environment.cell_radius_m, 500.0)
+        self.assertEqual(config.radio.environment.per_prb_tx_power_dbm, 5.0)
         self.assertEqual(config.radio.environment.center_distance_range_m, (50.0, 150.0))
         self.assertEqual(config.radio.environment.edge_distance_range_m, (425.0, 500.0))
         self.assertEqual(config.radio.environment.mcs_table[-1].bits_per_prb, 48)
@@ -233,6 +235,75 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertFalse(hasattr(config, "sweep"))
         self.assertEqual(config.radio.edge.edge_per_u_slot_prb_cap, 237)
         self.assertEqual(config.traffic.edge.packet_bits, 3200000)
+
+    def test_load_config_supports_periodic_pdb_fields(self) -> None:
+        payload = {
+            "simulation": {
+                "cycles": 20,
+                "slot_duration_ms": 1,
+                "tdd_pattern": "DSUUU",
+                "random_seed": 7,
+                "analysis_window_ms": 10000,
+            },
+            "resources": {"total_prb_per_u_slot": 20, "max_ue_per_slot": 4},
+            "traffic": {
+                "center": {
+                    "count": 1,
+                    "period_slots": 6,
+                    "packet_bits": 960,
+                    "pdb_ms": None,
+                    "gbr_bps": 7000,
+                },
+                "edge": {
+                    "count": 2,
+                    "packet_bits": 80000,
+                    "pdb_ms": 200,
+                    "arrival_mode": "periodic_by_pdb",
+                    "initial_phase_mode": "uniform_0_to_pdb",
+                },
+            },
+            "radio": {
+                "center": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+                "edge": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+            "report": {"output_dir": "outputs/test", "keep_slot_trace": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.simulation.analysis_window_ms, 10000)
+        self.assertEqual(config.traffic.edge.arrival_mode, "periodic_by_pdb")
+        self.assertEqual(config.traffic.edge.initial_phase_mode, "uniform_0_to_pdb")
+
+    def test_load_config_defaults_periodic_pdb_fields_for_legacy_configs(self) -> None:
+        payload = {
+            "simulation": {"cycles": 20, "slot_duration_ms": 1, "tdd_pattern": "DSUUU", "random_seed": 7},
+            "resources": {"total_prb_per_u_slot": 20, "max_ue_per_slot": 4},
+            "traffic": {
+                "center": {
+                    "count": 1,
+                    "period_slots": 6,
+                    "packet_bits": 960,
+                    "pdb_ms": None,
+                    "gbr_bps": 7000,
+                },
+                "edge": {"count": 2, "packet_bits": 80000, "pdb_ms": 200},
+            },
+            "radio": {
+                "center": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+                "edge": {"bits_per_prb": 10, "per_u_slot_prb_cap": 20},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+            "report": {"output_dir": "outputs/test", "keep_slot_trace": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "config.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.traffic.edge.arrival_mode, "single_burst")
+        self.assertEqual(config.traffic.edge.initial_phase_mode, "none")
 
     def test_load_config_supports_null_pdb_and_avg_rate_ewma_beta(self) -> None:
         payload = {

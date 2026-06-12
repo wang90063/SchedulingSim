@@ -7,19 +7,52 @@ class MetricsCollector:
         self.served_bits_total = 0
         self.served_bits_by_group = {"center": 0, "edge": 0}
         self.served_bits_by_user: dict[str, int] = {}
+        self.served_bits_in_window_total = 0
+        self.served_bits_in_window_by_group = {"center": 0, "edge": 0}
+        self.served_bits_in_window_by_user: dict[str, int] = {}
         self.used_prb_by_group = {"center": 0, "edge": 0}
+        self.used_prb_in_window_by_group = {"center": 0, "edge": 0}
+        self.pdb_arrivals_in_window_set: set[str] = set()
+        self.edge_pdb_arrivals_in_window_set: set[str] = set()
+        self.pdb_packets_completed_in_window_set: set[str] = set()
         self.radio_stats_by_user: dict[str, dict[str, float | int | str]] = {}
 
-    def record_bits_served(self, user_class: str, bits_sent: int, ue_id: str | None = None) -> None:
+    def record_bits_served(
+        self,
+        user_class: str,
+        bits_sent: int,
+        ue_id: str | None = None,
+        in_analysis_window: bool = True,
+    ) -> None:
         normalized_class = user_class if user_class in self.served_bits_by_group else "center"
         self.served_bits_total += bits_sent
         self.served_bits_by_group[normalized_class] += bits_sent
         if ue_id is not None:
             self.served_bits_by_user[ue_id] = self.served_bits_by_user.get(ue_id, 0) + bits_sent
+        if not in_analysis_window:
+            return
+        self.served_bits_in_window_total += bits_sent
+        self.served_bits_in_window_by_group[normalized_class] += bits_sent
+        if ue_id is not None:
+            self.served_bits_in_window_by_user[ue_id] = self.served_bits_in_window_by_user.get(ue_id, 0) + bits_sent
 
-    def record_prb_used(self, user_class: str, prb_count: int) -> None:
+    def record_prb_used(self, user_class: str, prb_count: int, in_analysis_window: bool = True) -> None:
         normalized_class = user_class if user_class in self.used_prb_by_group else "center"
         self.used_prb_by_group[normalized_class] += prb_count
+        if in_analysis_window:
+            self.used_prb_in_window_by_group[normalized_class] += prb_count
+
+    def record_packet_arrived(
+        self,
+        packet_id: str,
+        pdb_ms: int | None,
+        arrival_in_analysis_window: bool,
+        user_class: str = "center",
+    ) -> None:
+        if pdb_ms is None or not arrival_in_analysis_window or user_class != "edge":
+            return
+        self.pdb_arrivals_in_window_set.add(packet_id)
+        self.edge_pdb_arrivals_in_window_set.add(packet_id)
 
     def record_radio_state(self, user) -> None:
         state = getattr(user, "current_radio_state", None)
@@ -79,18 +112,24 @@ class MetricsCollector:
         user_class: str = "center",
         ue_id: str | None = None,
         is_target: bool = False,
+        arrival_in_analysis_window: bool = True,
         first_service_time: int | None = None,
         service_slot_count: int = 0,
         control_slot_count_while_pending: int = 0,
         waiting_u_slot_count_before_first_service: int = 0,
         waiting_u_slot_count_after_first_service: int = 0,
     ) -> None:
+        if pdb_ms is not None and arrival_in_analysis_window and user_class == "edge":
+            self.pdb_arrivals_in_window_set.add(packet_id)
+            self.pdb_packets_completed_in_window_set.add(packet_id)
+            self.edge_pdb_arrivals_in_window_set.add(packet_id)
         self.completed_packets.append(
             {
                 "packet_id": packet_id,
                 "ue_id": ue_id,
                 "delay_ms": completion_time - arrival_time,
                 "arrival_time": arrival_time,
+                "arrival_in_analysis_window": arrival_in_analysis_window,
                 "pdb_ms": pdb_ms,
                 "bits_sent": bits_sent,
                 "user_class": user_class,
@@ -116,36 +155,72 @@ class MetricsCollector:
         total_prb_available: int,
         users=None,
         simulation_duration_ms: int = 0,
+        analysis_window_ms: int | None = None,
+        window_total_prb_used: int | None = None,
+        window_total_prb_available: int | None = None,
         slot_duration_ms: int = 1,
         tdd_pattern: str = "DSUUU",
-    ) -> dict[str, float]:
+    ) -> dict[str, float | int | bool | str]:
         user_list = list(users or [])
+        resolved_analysis_window_ms = int(analysis_window_ms) if analysis_window_ms is not None else int(simulation_duration_ms)
+        resolved_window_total_prb_used = (
+            int(window_total_prb_used)
+            if window_total_prb_used is not None
+            else int(total_prb_used)
+        )
+        resolved_window_total_prb_available = (
+            int(window_total_prb_available)
+            if window_total_prb_available is not None
+            else int(total_prb_available)
+        )
         delays = [item["delay_ms"] for item in self.completed_packets] or [0]
         pdb_packets = [item for item in self.completed_packets if item["pdb_ms"] is not None]
-        violations = [item for item in pdb_packets if item["delay_ms"] > item["pdb_ms"]]
+        in_window_pdb_packets = [
+            item for item in pdb_packets if item.get("arrival_in_analysis_window", True)
+        ]
         center_packets = [item for item in self.completed_packets if item["user_class"] == "center"]
         edge_packets = [item for item in self.completed_packets if item["user_class"] == "edge"]
-        edge_pdb_packets = [item for item in edge_packets if item["pdb_ms"] is not None]
+        edge_pdb_packets_in_window = [
+            item
+            for item in edge_packets
+            if item["pdb_ms"] is not None and item.get("arrival_in_analysis_window", True)
+        ]
         center_users = [user for user in user_list if not user.is_edge_user]
         edge_users = [user for user in user_list if user.is_edge_user]
+        if resolved_analysis_window_ms < simulation_duration_ms:
+            on_time_in_window_pdb_packets = [
+                item for item in in_window_pdb_packets if item["delay_ms"] <= item["pdb_ms"]
+            ]
+            pending_in_window_pdb_count = sum(
+                1
+                for user in user_list
+                for packet in getattr(user.lc, "packets", [])
+                if packet.pdb_ms is not None and packet.arrival_time < resolved_analysis_window_ms
+            )
+            deadline_kpi_pdb_denominator = len(in_window_pdb_packets) + pending_in_window_pdb_count
+            violation_count = deadline_kpi_pdb_denominator - len(on_time_in_window_pdb_packets)
+        else:
+            deadline_kpi_pdb_denominator = len(pdb_packets)
+            violation_count = sum(1 for item in pdb_packets if item["delay_ms"] > item["pdb_ms"])
         simulation_duration_seconds = simulation_duration_ms / 1000.0 if simulation_duration_ms > 0 else 0.0
-        center_total_bits = float(self.served_bits_by_group["center"])
-        edge_total_bits = float(self.served_bits_by_group["edge"])
-        system_total_bits = float(self.served_bits_total)
-        center_used_prb = float(self.used_prb_by_group["center"])
-        edge_used_prb = float(self.used_prb_by_group["edge"])
+        analysis_window_seconds = resolved_analysis_window_ms / 1000.0 if resolved_analysis_window_ms > 0 else 0.0
+        center_total_bits = float(self.served_bits_in_window_by_group["center"])
+        edge_total_bits = float(self.served_bits_in_window_by_group["edge"])
+        system_total_bits = float(self.served_bits_in_window_total)
+        center_used_prb = float(self.used_prb_in_window_by_group["center"])
+        edge_used_prb = float(self.used_prb_in_window_by_group["edge"])
         center_rates_bps = [
-            self.served_bits_by_user.get(user.ue_id, 0) / simulation_duration_seconds
+            self.served_bits_in_window_by_user.get(user.ue_id, 0) / analysis_window_seconds
             for user in center_users
-        ] if simulation_duration_seconds > 0 else []
+        ] if analysis_window_seconds > 0 else []
         center_gbr_users = [
             user for user in center_users if getattr(getattr(user, "traffic_profile", None), "gbr_bps", 0.0) > 0.0
         ]
         center_gbr_satisfied = [
             user
             for user in center_gbr_users
-            if simulation_duration_seconds > 0
-            and (self.served_bits_by_user.get(user.ue_id, 0) / simulation_duration_seconds)
+            if analysis_window_seconds > 0
+            and (self.served_bits_in_window_by_user.get(user.ue_id, 0) / analysis_window_seconds)
             >= getattr(user.traffic_profile, "gbr_bps", 0.0)
         ]
         edge_hol_values = [
@@ -252,23 +327,43 @@ class MetricsCollector:
                 "target_edge_served_bits": float(packet.served_bits),
                 "target_edge_remaining_bits": float(packet.remaining_bits),
             }
+        target_ue_id = None
+        if target_completed is not None:
+            target_ue_id = target_completed.get("ue_id")
+        elif target_pending is not None:
+            target_ue_id = target_pending["ue_id"]
         target_edge_total_bits = float(target_summary["target_edge_served_bits"])
-        center_agg_rate_bps = center_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
-        edge_agg_rate_bps = edge_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
-        target_edge_rate_bps = target_edge_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
-        system_agg_rate_bps = system_total_bits / simulation_duration_seconds if simulation_duration_seconds > 0 else 0.0
+        center_agg_rate_bps = center_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
+        edge_agg_rate_bps = edge_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
+        target_edge_rate_bps = target_edge_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
+        system_agg_rate_bps = system_total_bits / analysis_window_seconds if analysis_window_seconds > 0 else 0.0
+        throughput_bits = (
+            self.served_bits_in_window_total
+            if resolved_analysis_window_ms < simulation_duration_ms
+            else sum(item["bits_sent"] for item in self.completed_packets)
+        )
         return {
             "avg_delay_ms": statistics.mean(delays),
             "p95_delay_ms": self._percentile(delays, 0.95),
             "p99_delay_ms": self._percentile(delays, 0.99),
             "simulation_duration_ms": float(simulation_duration_ms),
-            "analysis_window_ms": float(simulation_duration_ms),
-            "pdb_violation_rate": len(violations) / len(self.completed_packets) if self.completed_packets else 0.0,
-            "throughput_bits": sum(item["bits_sent"] for item in self.completed_packets),
+            "analysis_window_ms": float(resolved_analysis_window_ms),
+            "pdb_violation_rate": (
+                violation_count / deadline_kpi_pdb_denominator
+                if deadline_kpi_pdb_denominator
+                else 0.0
+            ),
+            "pdb_arrivals_in_window": len(self.pdb_arrivals_in_window_set),
+            "pdb_packets_completed_in_window_set": len(self.pdb_packets_completed_in_window_set),
+            "throughput_bits": throughput_bits,
             "served_bits": self.served_bits_total,
             "center_served_bits": self.served_bits_by_group["center"],
             "edge_served_bits": self.served_bits_by_group["edge"],
-            "prb_utilization": total_prb_used / total_prb_available if total_prb_available else 0.0,
+            "prb_utilization": (
+                resolved_window_total_prb_used / resolved_window_total_prb_available
+                if resolved_window_total_prb_available
+                else 0.0
+            ),
             "center_total_bits": center_total_bits,
             "edge_total_bits": edge_total_bits,
             "target_edge_total_bits": target_edge_total_bits,
@@ -279,8 +374,16 @@ class MetricsCollector:
             "system_agg_rate_bps": system_agg_rate_bps,
             "center_used_prb": center_used_prb,
             "edge_used_prb": edge_used_prb,
-            "center_prb_share": (center_used_prb / total_prb_used) if total_prb_used else 0.0,
-            "edge_prb_share": (edge_used_prb / total_prb_used) if total_prb_used else 0.0,
+            "center_prb_share": (
+                center_used_prb / resolved_window_total_prb_used
+                if resolved_window_total_prb_used
+                else 0.0
+            ),
+            "edge_prb_share": (
+                edge_used_prb / resolved_window_total_prb_used
+                if resolved_window_total_prb_used
+                else 0.0
+            ),
             "center_bits_per_used_prb": (center_total_bits / center_used_prb) if center_used_prb > 0 else 0.0,
             "edge_bits_per_used_prb": (edge_total_bits / edge_used_prb) if edge_used_prb > 0 else 0.0,
             "completed_packets": len(self.completed_packets),
@@ -290,8 +393,9 @@ class MetricsCollector:
             "edge_avg_delay_ms": statistics.mean([item["delay_ms"] for item in edge_packets]) if edge_packets else 0.0,
             "edge_p95_delay_ms": self._percentile([int(item["delay_ms"]) for item in edge_packets], 0.95),
             "edge_pdb_satisfaction_rate": (
-                sum(1 for item in edge_pdb_packets if item["delay_ms"] <= item["pdb_ms"]) / len(edge_pdb_packets)
-                if edge_pdb_packets
+                sum(1 for item in edge_pdb_packets_in_window if item["delay_ms"] <= item["pdb_ms"])
+                / len(self.edge_pdb_arrivals_in_window_set)
+                if self.edge_pdb_arrivals_in_window_set
                 else 0.0
             ),
             "center_avg_rate_bps": statistics.mean(center_rates_bps) if center_rates_bps else 0.0,

@@ -16,8 +16,15 @@ from scheduling_sim.config import (
 from scheduling_sim.systematic_analysis import (
     SceneBankSpec,
     SystematicCase,
+    aggregate_scene_rows,
     build_realization_bank,
     build_systematic_case_users,
+    capacity_summary_rows,
+    paired_metric_row,
+    partition_region,
+    per_run_metric_row,
+    select_typical_case_rows,
+    summarize_regions,
     systematic_cases,
 )
 
@@ -123,3 +130,188 @@ class SystematicAnalysisTests(unittest.TestCase):
             pdb_packet_kb_values=[50, 150, 300],
         )
         self.assertEqual(len(cases), 81)
+
+    def test_per_run_metric_row_keeps_traceability_fields(self) -> None:
+        row = per_run_metric_row(
+            scenario_id="bg24_pdb4_d100_k50_seed00",
+            seed=0,
+            policy="tail_append",
+            case=self._simple_case(),
+            summary={
+                "edge_pdb_satisfaction_rate": 0.6,
+                "center_agg_rate_bps": 1000.0,
+                "center_avg_rate_bps": 50.0,
+                "prb_utilization": 0.5,
+                "center_prb_share": 0.7,
+                "edge_prb_share": 0.3,
+                "pdb_violation_rate": 0.4,
+                "target_edge_completion_delay_ms": 120.0,
+                "target_edge_queue_wait_ms": 90.0,
+                "target_edge_service_time_ms": 30.0,
+                "edge_backlog_bits": 4000.0,
+                "pdb_arrivals_in_window": 8.0,
+            },
+        )
+        self.assertEqual(row["scenario_id"], "bg24_pdb4_d100_k50_seed00")
+        self.assertEqual(row["policy"], "tail_append")
+        self.assertEqual(row["pdb_arrivals_in_window"], 8.0)
+
+    def test_paired_metric_row_computes_gain_and_retention(self) -> None:
+        row = paired_metric_row(
+            case=self._simple_case(),
+            seed=3,
+            baseline_summary={
+                "edge_pdb_satisfaction_rate": 0.6,
+                "center_agg_rate_bps": 1000.0,
+                "prb_utilization": 0.50,
+                "center_prb_share": 0.70,
+                "edge_prb_share": 0.30,
+            },
+            proposed_summary={
+                "edge_pdb_satisfaction_rate": 0.8,
+                "center_agg_rate_bps": 900.0,
+                "prb_utilization": 0.55,
+                "center_prb_share": 0.66,
+                "edge_prb_share": 0.34,
+            },
+        )
+        self.assertEqual(row["delta_pdb_satisfaction_rate"], 0.2)
+        self.assertEqual(row["center_throughput_retention"], 0.9)
+
+    def test_aggregate_scene_rows_computes_mean_std_and_ci(self) -> None:
+        rows = aggregate_scene_rows(
+            [
+                {
+                    "background_user_count": 24,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.60,
+                    "proposed_edge_pdb_satisfaction_rate": 0.80,
+                    "delta_pdb_satisfaction_rate": 0.20,
+                    "center_throughput_retention": 0.90,
+                    "delta_prb_utilization": 0.05,
+                    "delta_center_prb_share": -0.04,
+                    "delta_edge_prb_share": 0.04,
+                },
+                {
+                    "background_user_count": 24,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.50,
+                    "proposed_edge_pdb_satisfaction_rate": 0.70,
+                    "delta_pdb_satisfaction_rate": 0.20,
+                    "center_throughput_retention": 0.80,
+                    "delta_prb_utilization": 0.02,
+                    "delta_center_prb_share": -0.03,
+                    "delta_edge_prb_share": 0.03,
+                },
+            ]
+        )
+        self.assertEqual(rows[0]["mean_delta_pdb_satisfaction_rate"], 0.20)
+        self.assertEqual(rows[0]["std_delta_pdb_satisfaction_rate"], 0.0)
+        self.assertGreaterEqual(rows[0]["ci95_center_throughput_retention"], 0.0)
+
+    def test_partition_region_uses_baseline_satisfaction_thresholds(self) -> None:
+        self.assertEqual(partition_region(0.97), "feasible")
+        self.assertEqual(partition_region(0.70), "critical")
+        self.assertEqual(partition_region(0.20), "overloaded")
+
+    def test_summarize_regions_reports_scene_share_and_win_rate(self) -> None:
+        rows = summarize_regions(
+            [
+                {
+                    "baseline_edge_pdb_satisfaction_rate": 0.97,
+                    "mean_delta_pdb_satisfaction_rate": 0.01,
+                    "mean_center_throughput_retention": 0.99,
+                    "mean_delta_prb_utilization": 0.00,
+                    "mean_delta_center_prb_share": -0.01,
+                    "mean_delta_edge_prb_share": 0.01,
+                },
+                {
+                    "baseline_edge_pdb_satisfaction_rate": 0.70,
+                    "mean_delta_pdb_satisfaction_rate": 0.10,
+                    "mean_center_throughput_retention": 0.95,
+                    "mean_delta_prb_utilization": 0.03,
+                    "mean_delta_center_prb_share": -0.02,
+                    "mean_delta_edge_prb_share": 0.02,
+                },
+            ]
+        )
+        by_region = {row["region"]: row for row in rows}
+        self.assertEqual(by_region["feasible"]["scene_point_count"], 1)
+        self.assertEqual(by_region["critical"]["proposed_win_rate"], 1.0)
+
+    def test_capacity_summary_rows_returns_both_boundary_views(self) -> None:
+        rows = capacity_summary_rows(
+            [
+                {
+                    "background_user_count": 24,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.98,
+                    "proposed_edge_pdb_satisfaction_rate": 0.98,
+                },
+                {
+                    "background_user_count": 24,
+                    "pdb_user_count": 10,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.80,
+                    "proposed_edge_pdb_satisfaction_rate": 0.96,
+                },
+                {
+                    "background_user_count": 36,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.70,
+                    "proposed_edge_pdb_satisfaction_rate": 0.95,
+                },
+            ],
+            threshold=0.95,
+        )
+        dimensions = {row["dimension"] for row in rows}
+        self.assertEqual(dimensions, {"fixed_background_user_count", "fixed_pdb_user_count"})
+
+    def test_select_typical_case_rows_labels_key_scene_points(self) -> None:
+        rows = select_typical_case_rows(
+            [
+                {
+                    "background_user_count": 24,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.98,
+                    "proposed_edge_pdb_satisfaction_rate": 0.99,
+                    "mean_delta_pdb_satisfaction_rate": 0.01,
+                    "mean_center_throughput_retention": 0.99,
+                },
+                {
+                    "background_user_count": 36,
+                    "pdb_user_count": 10,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 50,
+                    "baseline_edge_pdb_satisfaction_rate": 0.70,
+                    "proposed_edge_pdb_satisfaction_rate": 0.90,
+                    "mean_delta_pdb_satisfaction_rate": 0.20,
+                    "mean_center_throughput_retention": 0.93,
+                },
+                {
+                    "background_user_count": 48,
+                    "pdb_user_count": 16,
+                    "pdb_ms": 500,
+                    "pdb_packet_kb": 300,
+                    "baseline_edge_pdb_satisfaction_rate": 0.20,
+                    "proposed_edge_pdb_satisfaction_rate": 0.35,
+                    "mean_delta_pdb_satisfaction_rate": 0.15,
+                    "mean_center_throughput_retention": 0.91,
+                },
+            ]
+        )
+        labels = {row["case_label"] for row in rows}
+        self.assertIn("easy", labels)
+        self.assertIn("critical", labels)
+        self.assertIn("overloaded", labels)

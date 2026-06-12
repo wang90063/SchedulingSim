@@ -92,6 +92,7 @@ class ConfigLoaderTests(unittest.TestCase):
                     "scenario_type": "uma",
                     "cell_radius_m": 500,
                     "carrier_frequency_ghz": 3.5,
+                    "per_prb_tx_power_dbm": 5.0,
                     "noise_figure_db": 7.0,
                     "interference_margin_db": 3.0,
                     "shadow_std_db": 4.0,
@@ -117,6 +118,7 @@ class ConfigLoaderTests(unittest.TestCase):
         self.assertEqual(config.traffic.center.gbr_bps, 0.0)
         self.assertEqual(config.radio.environment.scenario_type, "uma")
         self.assertEqual(config.radio.environment.cell_radius_m, 500.0)
+        self.assertEqual(config.radio.environment.per_prb_tx_power_dbm, 5.0)
         self.assertEqual(config.radio.environment.center_distance_range_m, (50.0, 150.0))
         self.assertEqual(config.radio.environment.edge_distance_range_m, (425.0, 500.0))
         self.assertEqual(config.radio.environment.mcs_table[-1].bits_per_prb, 48)

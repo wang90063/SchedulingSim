@@ -54,6 +54,7 @@ class WirelessEnvConfig:
     scenario_type: str = "legacy"
     cell_radius_m: float = 0.0
     carrier_frequency_ghz: float = 0.0
+    per_prb_tx_power_dbm: float = 5.0
     noise_figure_db: float = 0.0
     interference_margin_db: float = 0.0
     shadow_std_db: float = 0.0
@@ -216,6 +217,7 @@ def _load_wireless_env_config(
         scenario_type=str(payload.get("scenario_type", "legacy")),
         cell_radius_m=float(payload.get("cell_radius_m", 0.0)),
         carrier_frequency_ghz=float(payload.get("carrier_frequency_ghz", 0.0)),
+        per_prb_tx_power_dbm=float(payload.get("per_prb_tx_power_dbm", 5.0)),
         noise_figure_db=float(payload.get("noise_figure_db", 0.0)),
         interference_margin_db=float(payload.get("interference_margin_db", 0.0)),
         shadow_std_db=float(payload.get("shadow_std_db", 0.0)),

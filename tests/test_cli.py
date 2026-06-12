@@ -436,6 +436,26 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("business_aware_constrained_insert", result.stdout)
 
+    def test_run_command_supports_hopeless_front_insert_override(self) -> None:
+        result = subprocess.run(
+            [
+                "python",
+                "-m",
+                "scheduling_sim.cli",
+                "run",
+                "configs/target_edge_compare.json",
+                "--reinsert-policy",
+                "hopeless_front_insert",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("hopeless_front_insert", result.stdout)
+
     def test_target_edge_pdb_sweep_script_runs(self) -> None:
         result = subprocess.run(
             [
@@ -804,6 +824,172 @@ class CliSmokeTests(unittest.TestCase):
             self.assertIn('"pairing_rule"', manifest_text)
             self.assertIn('"queue_time_ms"', manifest_text)
             self.assertIn('"distance_to_bs_m"', manifest_text)
+
+    def test_systematic_simulation_analysis_runner_writes_manifest_and_tables(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "systematic_small.json"
+            output_dir = Path(tmp) / "systematic-output"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "simulation": {
+                            "cycles": 2400,
+                            "slot_duration_ms": 1,
+                            "tdd_pattern": "DSUUU",
+                            "random_seed": 7,
+                            "analysis_window_ms": 10000,
+                        },
+                        "resources": {"total_prb_per_u_slot": 273, "max_ue_per_slot": 16},
+                        "traffic": {
+                            "center": {
+                                "count": 48,
+                                "period_slots": 10,
+                                "packet_bits": 16000,
+                                "pdb_ms": None,
+                                "gbr_bps": 0.0,
+                            },
+                            "edge": {
+                                "count": 16,
+                                "packet_bits": 400000,
+                                "pdb_ms": 100,
+                                "arrival_mode": "periodic_by_pdb",
+                                "initial_phase_mode": "uniform_0_to_pdb",
+                            },
+                        },
+                        "radio": {
+                            "environment": {
+                                "scenario_type": "uma",
+                                "cell_radius_m": 500.0,
+                                "carrier_frequency_ghz": 3.5,
+                                "per_prb_tx_power_dbm": 5.0,
+                                "noise_figure_db": 7.0,
+                                "interference_margin_db": 3.0,
+                                "shadow_std_db": 4.0,
+                                "slow_fading_alpha": 0.95,
+                                "slot_jitter_std_db": 0.5,
+                                "mcs_table": [
+                                    {"sinr_db": -5.0, "mcs_index": 0, "bits_per_prb": 24},
+                                    {"sinr_db": 0.0, "mcs_index": 1, "bits_per_prb": 48},
+                                    {"sinr_db": 10.0, "mcs_index": 2, "bits_per_prb": 96},
+                                ],
+                            },
+                            "center": {"base_snr_db": 12.0, "snr_min_db": 0.0, "snr_max_db": 20.0},
+                            "edge": {
+                                "base_snr_db": -2.0,
+                                "snr_min_db": -8.0,
+                                "snr_max_db": 4.0,
+                                "edge_per_u_slot_prb_cap": 273,
+                            },
+                        },
+                        "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+                        "report": {"output_dir": str(output_dir), "keep_slot_trace": False},
+                        "systematic_analysis": {
+                            "background_user_count_values": [24],
+                            "pdb_user_count_values": [4],
+                            "pdb_ms_values": [100],
+                            "pdb_packet_kb_values": [50],
+                            "repeat_count": 1,
+                            "random_seed_base": 7,
+                            "baseline_policy": "tail_append",
+                            "ours_policy": "business_aware_constrained_insert",
+                            "background_packet_kb": 2,
+                            "scene_bank": {
+                                "medium_distance_range_m": [170.0, 230.0],
+                                "good_distance_range_m": [80.0, 140.0],
+                                "poor_distance_range_m": [390.0, 470.0],
+                            },
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue((output_dir / "experiment_manifest.json").exists())
+            self.assertTrue((output_dir / "per_run_rows.csv").exists())
+            self.assertTrue((output_dir / "paired_rows.csv").exists())
+            self.assertTrue((output_dir / "scene_summary.csv").exists())
+            self.assertTrue((output_dir / "region_summary.csv").exists())
+            self.assertTrue((output_dir / "capacity_summary_95.csv").exists())
+            self.assertTrue((output_dir / "capacity_summary_90.csv").exists())
+            self.assertTrue((output_dir / "typical_case_candidates.csv").exists())
+            self.assertTrue((output_dir / "summary_report.md").exists())
+
+    def test_systematic_simulation_analysis_runner_supports_hopeless_front_insert_ours_policy(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "systematic_hopeless_front.json"
+            output_dir = Path(tmp) / "systematic-hopeless-front-output"
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"]["background_user_count_values"] = [24]
+            payload["systematic_analysis"]["pdb_user_count_values"] = [4]
+            payload["systematic_analysis"]["pdb_ms_values"] = [100]
+            payload["systematic_analysis"]["pdb_packet_kb_values"] = [50]
+            payload["systematic_analysis"]["repeat_count"] = 1
+            payload["systematic_analysis"]["ours_policy"] = "hopeless_front_insert"
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["ours_policy"], "hopeless_front_insert")
+            paired_rows = (output_dir / "paired_rows.csv").read_text(encoding="utf-8")
+            self.assertIn("delta_pdb_satisfaction_rate", paired_rows)
+
+    def test_systematic_simulation_analysis_renderer_runs_on_runner_output(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "systematic_small.json"
+            output_dir = Path(tmp) / "systematic-output"
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"]["background_user_count_values"] = [24]
+            payload["systematic_analysis"]["pdb_user_count_values"] = [4]
+            payload["systematic_analysis"]["pdb_ms_values"] = [100]
+            payload["systematic_analysis"]["pdb_packet_kb_values"] = [50]
+            payload["systematic_analysis"]["repeat_count"] = 1
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            run_result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(run_result.returncode, 0, msg=run_result.stderr)
+            render_result = subprocess.run(
+                ["python", "scripts/render_systematic_simulation_analysis_plots.py", str(output_dir)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(render_result.returncode, 0, msg=render_result.stderr)
+            self.assertTrue((output_dir / "overview_delta_pdb_satisfaction.png").exists())
+            self.assertTrue((output_dir / "center_throughput_retention.png").exists())
+            self.assertTrue((output_dir / "capacity_boundary_95.png").exists())
+            self.assertTrue((output_dir / "capacity_boundary_90.png").exists())
 
     def test_edge_delay_throughput_tradeoff_report_script_runs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

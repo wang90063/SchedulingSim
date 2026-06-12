@@ -7,7 +7,12 @@ from scheduling_sim.pdb_arrivals import (
 from scheduling_sim.planning import PhasePrbPlanner
 from scheduling_sim.queue import ActiveQueue
 from scheduling_sim.ranking import EpfRankingPolicy
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy, TargetOnlyConstrainedInsertPolicy
+from scheduling_sim.reinsert import (
+    ConstrainedInsertPolicy,
+    HopelessFrontInsertPolicy,
+    TailAppendPolicy,
+    TargetOnlyConstrainedInsertPolicy,
+)
 from scheduling_sim.wireless_env import McsEntryView, StableWirelessEnv, WirelessEnvConfigView
 
 
@@ -25,6 +30,8 @@ class UlSimulator:
             self.reinsert = TailAppendPolicy()
         elif config.scheduler.reinsert_policy == "target_only_constrained_insert":
             self.reinsert = TargetOnlyConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
+        elif config.scheduler.reinsert_policy == "hopeless_front_insert":
+            self.reinsert = HopelessFrontInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         else:
             self.reinsert = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         self._wireless_env_injected = wireless_env is not None
@@ -58,6 +65,7 @@ class UlSimulator:
                 scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
                 cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
                 carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+                per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
                 noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
                 interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
                 shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),

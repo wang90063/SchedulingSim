@@ -592,10 +592,20 @@ def build_typical_case_detail_rows(
         pdb_user_count = int(case_row["pdb_user_count"])
         pdb_ms = int(case_row["pdb_ms"])
         pdb_packet_kb = int(case_row["pdb_packet_kb"])
+        case_groups: dict[str, list[dict[str, float | int | str]]] = {}
         for policy in (baseline_policy, proposed_policy):
             group = grouped.get((policy, background_user_count, pdb_user_count, pdb_ms, pdb_packet_kb), [])
             if not group:
-                continue
+                raise ValueError(
+                    "missing policy "
+                    f"{policy} for representative case "
+                    f"bg={background_user_count} "
+                    f"pdb_users={pdb_user_count} "
+                    f"pdb_ms={pdb_ms} "
+                    f"pdb_kb={pdb_packet_kb}"
+                )
+            case_groups[policy] = group
+        for policy in (baseline_policy, proposed_policy):
             detail_row: dict[str, float | int | str] = {
                 "case_label": str(case_row["case_label"]),
                 "policy": str(policy),
@@ -605,7 +615,7 @@ def build_typical_case_detail_rows(
                 "pdb_packet_kb": pdb_packet_kb,
             }
             for metric in _TYPICAL_CASE_DETAIL_METRICS:
-                detail_row[metric] = _mean([float(row[metric]) for row in group])
+                detail_row[metric] = _mean([float(row[metric]) for row in case_groups[policy]])
             rows.append(detail_row)
     return rows
 

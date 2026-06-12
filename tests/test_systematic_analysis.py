@@ -352,6 +352,25 @@ class SystematicAnalysisTests(unittest.TestCase):
                 "edge_backlog_bits": 4000.0,
             },
             {
+                "policy": "tail_append",
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "edge_pdb_satisfaction_rate": 0.96,
+                "center_agg_rate_bps": 1100.0,
+                "center_avg_rate_bps": 55.0,
+                "prb_utilization": 0.54,
+                "center_prb_share": 0.72,
+                "edge_prb_share": 0.28,
+                "pdb_arrivals_in_window": 10.0,
+                "pdb_violation_rate": 0.04,
+                "target_edge_completion_delay_ms": 130.0,
+                "target_edge_queue_wait_ms": 110.0,
+                "target_edge_service_time_ms": 20.0,
+                "edge_backlog_bits": 4200.0,
+            },
+            {
                 "policy": "hopeless_front_insert",
                 "background_user_count": 24,
                 "pdb_user_count": 4,
@@ -370,6 +389,25 @@ class SystematicAnalysisTests(unittest.TestCase):
                 "target_edge_service_time_ms": 28.0,
                 "edge_backlog_bits": 3500.0,
             },
+            {
+                "policy": "hopeless_front_insert",
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "edge_pdb_satisfaction_rate": 0.97,
+                "center_agg_rate_bps": 960.0,
+                "center_avg_rate_bps": 48.0,
+                "prb_utilization": 0.50,
+                "center_prb_share": 0.66,
+                "edge_prb_share": 0.34,
+                "pdb_arrivals_in_window": 10.0,
+                "pdb_violation_rate": 0.03,
+                "target_edge_completion_delay_ms": 108.0,
+                "target_edge_queue_wait_ms": 78.0,
+                "target_edge_service_time_ms": 30.0,
+                "edge_backlog_bits": 3300.0,
+            },
         ]
 
         rows = build_typical_case_detail_rows(
@@ -382,6 +420,59 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(len(rows), 2)
         self.assertEqual({row["policy"] for row in rows}, {"tail_append", "hopeless_front_insert"})
         self.assertEqual({row["case_label"] for row in rows}, {"easy"})
+        by_policy = {row["policy"]: row for row in rows}
+        self.assertEqual(by_policy["tail_append"]["edge_pdb_satisfaction_rate"], 0.97)
+        self.assertEqual(by_policy["tail_append"]["center_agg_rate_bps"], 1050.0)
+        self.assertEqual(by_policy["tail_append"]["target_edge_queue_wait_ms"], 100.0)
+        self.assertEqual(by_policy["hopeless_front_insert"]["edge_pdb_satisfaction_rate"], 0.98)
+        self.assertEqual(by_policy["hopeless_front_insert"]["center_agg_rate_bps"], 970.0)
+        self.assertEqual(by_policy["hopeless_front_insert"]["target_edge_queue_wait_ms"], 80.0)
+
+    def test_build_typical_case_detail_rows_raises_when_selected_case_is_missing_requested_policy(self) -> None:
+        scene_rows = [
+            {
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "baseline_edge_pdb_satisfaction_rate": 0.98,
+                "proposed_edge_pdb_satisfaction_rate": 0.99,
+                "mean_delta_pdb_satisfaction_rate": 0.01,
+                "mean_center_throughput_retention": 0.99,
+            }
+        ]
+        per_run_rows = [
+            {
+                "policy": "tail_append",
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "edge_pdb_satisfaction_rate": 0.98,
+                "center_agg_rate_bps": 1000.0,
+                "center_avg_rate_bps": 50.0,
+                "prb_utilization": 0.50,
+                "center_prb_share": 0.70,
+                "edge_prb_share": 0.30,
+                "pdb_arrivals_in_window": 8.0,
+                "pdb_violation_rate": 0.02,
+                "target_edge_completion_delay_ms": 120.0,
+                "target_edge_queue_wait_ms": 90.0,
+                "target_edge_service_time_ms": 30.0,
+                "edge_backlog_bits": 4000.0,
+            }
+        ]
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "missing policy hopeless_front_insert for representative case bg=24 pdb_users=4 pdb_ms=100 pdb_kb=50",
+        ):
+            build_typical_case_detail_rows(
+                scene_rows,
+                per_run_rows,
+                baseline_policy="tail_append",
+                proposed_policy="hopeless_front_insert",
+            )
 
     def test_boundary_feasibility_rows_builds_baseline_and_proposed_masks(self) -> None:
         rows = build_boundary_feasibility_rows(
@@ -400,4 +491,23 @@ class SystematicAnalysisTests(unittest.TestCase):
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["baseline_feasible"], 0)
+        self.assertEqual(rows[0]["proposed_feasible"], 1)
+        self.assertEqual(rows[0]["threshold"], 0.95)
+
+    def test_boundary_feasibility_rows_treats_equality_at_threshold_as_feasible(self) -> None:
+        rows = build_boundary_feasibility_rows(
+            [
+                {
+                    "background_user_count": 36,
+                    "pdb_user_count": 10,
+                    "pdb_ms": 300,
+                    "pdb_packet_kb": 150,
+                    "baseline_edge_pdb_satisfaction_rate": 0.95,
+                    "proposed_edge_pdb_satisfaction_rate": 0.95,
+                }
+            ],
+            threshold=0.95,
+        )
+
+        self.assertEqual(rows[0]["baseline_feasible"], 1)
         self.assertEqual(rows[0]["proposed_feasible"], 1)

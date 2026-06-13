@@ -80,6 +80,16 @@ def _include_case_from_sweep(sweep: dict[str, object]):
     return lambda case: (case.background_user_count + case.pdb_user_count) >= minimum_total_users
 
 
+def _reuse_raw_summaries(reuse_output_dirs: list[str]) -> list[dict[str, object]]:
+    raw_summaries: list[dict[str, object]] = []
+    for directory in reuse_output_dirs:
+        raw_summary_path = Path(directory) / "raw_summaries.json"
+        if not raw_summary_path.exists():
+            continue
+        raw_summaries.extend(json.loads(raw_summary_path.read_text(encoding="utf-8")))
+    return raw_summaries
+
+
 def _reuse_rows(reuse_output_dirs: list[str]) -> tuple[list[dict[str, object]], list[dict[str, object]], set[tuple[int, int, int, int]]]:
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []
@@ -328,6 +338,7 @@ def main() -> int:
     ours_policy = str(sweep["ours_policy"])
     background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
     reuse_output_dirs = [str(value) for value in sweep.get("reuse_output_dirs", [])]
+    existing_raw_summaries = _reuse_raw_summaries(reuse_output_dirs)
     existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(reuse_output_dirs)
     include_case = _include_case_from_sweep(sweep)
     all_cases = systematic_cases(
@@ -397,6 +408,7 @@ def main() -> int:
 
     merged_per_run_rows = merge_row_sets(existing_rows=existing_per_run_rows, new_rows=per_run_rows)
     merged_paired_rows = merge_row_sets(existing_rows=existing_paired_rows, new_rows=paired_rows)
+    merged_raw_summaries = [*existing_raw_summaries, *raw_summaries]
     scene_rows = aggregate_scene_rows(merged_paired_rows)
     region_rows = summarize_regions(scene_rows)
     capacity_rows_95 = capacity_summary_rows(scene_rows, threshold=0.95)
@@ -434,7 +446,7 @@ def main() -> int:
     _write_table(output_dir / "paired_rows.csv", paired_rows)
     final_output_dir.mkdir(parents=True, exist_ok=True)
     (final_output_dir / "experiment_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    (final_output_dir / "raw_summaries.json").write_text(json.dumps(raw_summaries, indent=2), encoding="utf-8")
+    (final_output_dir / "raw_summaries.json").write_text(json.dumps(merged_raw_summaries, indent=2), encoding="utf-8")
     _write_table(final_output_dir / "per_run_rows.csv", merged_per_run_rows)
     _write_table(final_output_dir / "paired_rows.csv", merged_paired_rows)
     _write_table(final_output_dir / "scene_summary.csv", scene_rows)

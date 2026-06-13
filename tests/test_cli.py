@@ -1040,6 +1040,25 @@ class CliSmokeTests(unittest.TestCase):
             reused_dir = Path(tmp) / "reused"
             reused_dir.mkdir(parents=True, exist_ok=True)
             _write_nr_ul_main_table(Path(tmp), repo_root)
+            (reused_dir / "raw_summaries.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "seed": 7,
+                            "scenario_id": "bg24_pdb8_d100_k50_seed00",
+                            "policy": "tail_append",
+                            "summary": {"edge_pdb_satisfaction_rate": 0.0},
+                        },
+                        {
+                            "seed": 7,
+                            "scenario_id": "bg24_pdb8_d100_k50_seed00",
+                            "policy": "hopeless_front_insert",
+                            "summary": {"edge_pdb_satisfaction_rate": 0.1},
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
             (reused_dir / "per_run_rows.csv").write_text(
                 "seed,scenario_id,policy,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,edge_pdb_satisfaction_rate,center_agg_rate_bps,center_avg_rate_bps,prb_utilization,center_prb_share,edge_prb_share,pdb_arrivals_in_window,pdb_violation_rate,target_edge_completion_delay_ms,target_edge_queue_wait_ms,target_edge_service_time_ms,edge_backlog_bits\n"
                 "7,bg24_pdb8_d100_k50_seed00,tail_append,24,8,100,50,0.0,1000.0,50.0,1.0,0.4,0.6,8.0,1.0,100.0,70.0,30.0,0.0\n"
@@ -1083,6 +1102,8 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual(merged_manifest["reused_scene_point_count"], 1)
             self.assertEqual(merged_manifest["new_scene_point_count"], 1)
             self.assertEqual(merged_manifest["final_scene_point_count"], 2)
+            merged_raw_summaries = json.loads((merged_output_dir / "raw_summaries.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(merged_raw_summaries), 4)
 
     def test_systematic_simulation_analysis_renderer_runs_on_runner_output(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

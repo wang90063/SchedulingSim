@@ -1,0 +1,105 @@
+{
+  "simulation": {
+    "cycles": 2400,
+    "slot_duration_ms": 1,
+    "tdd_pattern": "DSUUU",
+    "random_seed": 7,
+    "analysis_window_ms": 10000
+  },
+  "resources": {
+    "total_prb_per_u_slot": 273,
+    "max_ue_per_slot": 16
+  },
+  "traffic": {
+    "center": {
+      "count": 48,
+      "period_slots": 10,
+      "packet_bits": 16000,
+      "pdb_ms": null,
+      "gbr_bps": 0.0
+    },
+    "edge": {
+      "count": 16,
+      "packet_bits": 400000,
+      "pdb_ms": 100,
+      "arrival_mode": "periodic_by_pdb",
+      "initial_phase_mode": "uniform_0_to_pdb"
+    }
+  },
+  "radio": {
+    "environment": {
+      "scenario_type": "uma",
+      "cell_radius_m": 500.0,
+      "carrier_frequency_ghz": 3.5,
+      "per_prb_tx_power_dbm": 5.0,
+      "noise_figure_db": 7.0,
+      "interference_margin_db": 3.0,
+      "shadow_std_db": 4.0,
+      "slow_fading_alpha": 0.95,
+      "slot_jitter_std_db": 0.5,
+      "mcs_table_path": "mcs/nr_ul_main.json"
+    },
+    "center": {
+      "base_snr_db": 12.0,
+      "snr_min_db": 0.0,
+      "snr_max_db": 20.0
+    },
+    "edge": {
+      "base_snr_db": -2.0,
+      "snr_min_db": -8.0,
+      "snr_max_db": 4.0,
+      "edge_per_u_slot_prb_cap": 273
+    }
+  },
+  "scheduler": {
+    "ranking": "epf",
+    "reinsert_policy": "tail_append"
+  },
+  "report": {
+    "output_dir": "outputs/systematic_simulation_analysis_option1_batch_bg36",
+    "keep_slot_trace": false
+  },
+  "systematic_analysis": {
+    "background_user_count_values": [
+      36
+    ],
+    "pdb_user_count_values": [
+      4,
+      10,
+      16
+    ],
+    "pdb_ms_values": [
+      100,
+      300,
+      500
+    ],
+    "pdb_packet_kb_values": [
+      50,
+      150,
+      300
+    ],
+    "repeat_count": 10,
+    "random_seed_base": 7,
+    "baseline_policy": "tail_append",
+    "ours_policy": "hopeless_front_insert",
+    "background_packet_kb": 2,
+    "scene_bank": {
+      "medium_distance_range_m": [
+        170.0,
+        230.0
+      ],
+      "good_distance_range_m": [
+        80.0,
+        140.0
+      ],
+      "poor_distance_range_m": [
+        390.0,
+        470.0
+      ]
+    },
+    "reuse_output_dirs": [
+      "outputs/systematic_simulation_analysis_option1_batch_bg24"
+    ],
+    "merged_output_dir": "outputs/systematic_simulation_analysis_option1_corrected"
+  }
+}

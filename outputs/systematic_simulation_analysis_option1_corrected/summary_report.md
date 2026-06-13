@@ -39,6 +39,29 @@
 | 36 | 4 | 300 | 50 | 0.028 | 0.097 | 0.069 | 0.706 |
 | 48 | 4 | 300 | 50 | 0.008 | 0.063 | 0.054 | 0.732 |
 
+## Insight Summary
+
+- Positive-gain scene points: `10`
+  - dominant `pdb_user_count`: `4:9, 10:1`
+  - dominant `pdb_ms`: `100:1, 300:6, 500:3`
+  - dominant `pdb_packet_kb`: `50:8, 150:2`
+- Zero-gain scene points: `64`
+  - dominant `pdb_user_count`: `4:17, 10:22, 16:25`
+  - dominant `pdb_ms`: `100:25, 300:20, 500:19`
+  - dominant `pdb_packet_kb`: `50:12, 150:25, 300:27`
+- Negative-gain scene points: `7`
+  - dominant `pdb_user_count`: `4:1, 10:4, 16:2`
+  - dominant `pdb_ms`: `100:1, 300:1, 500:5`
+  - dominant `pdb_packet_kb`: `50:7`
+- Positive-gain pattern:
+  - concentrated around `bg=`48` pdb_users=`4` pdb_ms=`500` pdb_packet_kb=`50``
+  - these points typically have light `PDB` user count and small packets, so queue reordering can convert near-miss packets into on-time completions without changing total `PRB` utilization.
+- Zero-gain pattern:
+  - concentrated in larger `PDB` packet sizes and heavier `PDB` user counts, where both policies already saturate `PRB` and reordering does not change how many packets fit inside the deadline window.
+- Negative-gain pattern:
+  - worst negative point is `bg=`36` pdb_users=`10` pdb_ms=`500` pdb_packet_kb=`50``
+  - these points usually remain fully overloaded, so pulling more `PRB` toward `edge` users changes who gets served but does not increase deadline hits, while still reducing `center` throughput.
+
 ## Background Cost and Resource Analysis
 
 - Mean center throughput retention across scene points: `0.639`

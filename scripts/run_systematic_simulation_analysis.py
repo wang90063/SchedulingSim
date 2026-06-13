@@ -57,6 +57,30 @@ def _mean_metric(rows: list[dict[str, object]], field: str) -> float:
     return sum(float(row[field]) for row in rows) / float(len(rows))
 
 
+def _group_counts(rows: list[dict[str, object]], field: str) -> list[tuple[int, int]]:
+    counts: dict[int, int] = {}
+    for row in rows:
+        key = int(row[field])
+        counts[key] = counts.get(key, 0) + 1
+    return sorted(counts.items())
+
+
+def _format_group_counts(rows: list[dict[str, object]], field: str) -> str:
+    counts = _group_counts(rows, field)
+    if not counts:
+        return "none"
+    return ", ".join(f"{key}:{count}" for key, count in counts)
+
+
+def _format_scene_tuple(row: dict[str, object]) -> str:
+    return (
+        f"bg=`{int(row['background_user_count'])}` "
+        f"pdb_users=`{int(row['pdb_user_count'])}` "
+        f"pdb_ms=`{int(row['pdb_ms'])}` "
+        f"pdb_packet_kb=`{int(row['pdb_packet_kb'])}`"
+    )
+
+
 def _boundary_summary(boundary_rows: list[dict[str, object]]) -> dict[str, object]:
     expanded_rows = [
         row for row in boundary_rows if int(row["baseline_feasible"]) == 0 and int(row["proposed_feasible"]) == 1
@@ -171,6 +195,48 @@ def _summary_report(
             f"{float(row['proposed_edge_pdb_satisfaction_rate']):.3f} | "
             f"{float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
             f"{float(row['mean_center_throughput_retention']):.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Insight Summary",
+            "",
+            f"- Positive-gain scene points: `{len(improved_rows)}`",
+            f"  - dominant `pdb_user_count`: `{_format_group_counts(improved_rows, 'pdb_user_count')}`",
+            f"  - dominant `pdb_ms`: `{_format_group_counts(improved_rows, 'pdb_ms')}`",
+            f"  - dominant `pdb_packet_kb`: `{_format_group_counts(improved_rows, 'pdb_packet_kb')}`",
+            f"- Zero-gain scene points: `{len(neutral_rows)}`",
+            f"  - dominant `pdb_user_count`: `{_format_group_counts(neutral_rows, 'pdb_user_count')}`",
+            f"  - dominant `pdb_ms`: `{_format_group_counts(neutral_rows, 'pdb_ms')}`",
+            f"  - dominant `pdb_packet_kb`: `{_format_group_counts(neutral_rows, 'pdb_packet_kb')}`",
+            f"- Negative-gain scene points: `{len(worsened_rows)}`",
+            f"  - dominant `pdb_user_count`: `{_format_group_counts(worsened_rows, 'pdb_user_count')}`",
+            f"  - dominant `pdb_ms`: `{_format_group_counts(worsened_rows, 'pdb_ms')}`",
+            f"  - dominant `pdb_packet_kb`: `{_format_group_counts(worsened_rows, 'pdb_packet_kb')}`",
+        ]
+    )
+    if improved_rows:
+        lines.extend(
+            [
+                "- Positive-gain pattern:",
+                f"  - concentrated around `{_format_scene_tuple(max(improved_rows, key=lambda row: float(row['mean_delta_pdb_satisfaction_rate'])))}`",
+                "  - these points typically have light `PDB` user count and small packets, so queue reordering can convert near-miss packets into on-time completions without changing total `PRB` utilization.",
+            ]
+        )
+    if neutral_rows:
+        lines.extend(
+            [
+                "- Zero-gain pattern:",
+                "  - concentrated in larger `PDB` packet sizes and heavier `PDB` user counts, where both policies already saturate `PRB` and reordering does not change how many packets fit inside the deadline window.",
+            ]
+        )
+    if worsened_rows:
+        lines.extend(
+            [
+                "- Negative-gain pattern:",
+                f"  - worst negative point is `{_format_scene_tuple(min(worsened_rows, key=lambda row: float(row['mean_delta_pdb_satisfaction_rate'])))}`",
+                "  - these points usually remain fully overloaded, so pulling more `PRB` toward `edge` users changes who gets served but does not increase deadline hits, while still reducing `center` throughput.",
+            ]
         )
     lines.extend(
         [

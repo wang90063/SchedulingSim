@@ -1,5 +1,6 @@
 import unittest
 
+import scheduling_sim.systematic_analysis as systematic_analysis
 from scheduling_sim.config import (
     AppConfig,
     McsEntryConfig,
@@ -198,6 +199,68 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertAlmostEqual(cases[0].rho_pdb, 0.183, places=3)
         self.assertAlmostEqual(cases[0].prb_share_pdb, 0.3206, places=3)
         self.assertAlmostEqual(cases[0].g_pdb_mbps, 0.4, places=3)
+
+    def test_rho_first_load_ratio_cases_solve_background_and_pdb_parameters(self) -> None:
+        if not hasattr(systematic_analysis, "LoadRatioMappingPolicy"):
+            self.fail("LoadRatioMappingPolicy should exist for rho-first load-ratio scans")
+        if not hasattr(systematic_analysis, "BackgroundMappingPolicy"):
+            self.fail("BackgroundMappingPolicy should exist for rho-first load-ratio scans")
+        if not hasattr(systematic_analysis, "PdbMappingPolicy"):
+            self.fail("PdbMappingPolicy should exist for rho-first load-ratio scans")
+
+        cases = load_ratio_cases(
+            rho_bg_values=[0.388],
+            rho_pdb_values=[0.183],
+            pdb_ms_values=[20, 100],
+            background_capacity_mbps=66.03,
+            pdb_capacity_mbps=8.74,
+            mapping_policy=systematic_analysis.LoadRatioMappingPolicy(
+                background=systematic_analysis.BackgroundMappingPolicy(
+                    background_user_count_values=[32, 40, 48],
+                    background_packet_kb_values=[1.0, 1.5, 2.0],
+                    background_period_ms_range=(4.0, 30.0),
+                    anchor_background_user_count=40,
+                    anchor_background_packet_kb=2.0,
+                ),
+                pdb=systematic_analysis.PdbMappingPolicy(
+                    pdb_user_count_values=[4, 8],
+                    pdb_packet_kb_range=(0.5, 80.0),
+                    anchor_pdb_user_count=4,
+                ),
+            ),
+        )
+
+        self.assertEqual(len(cases), 2)
+        self.assertEqual(cases[0].target_rho_bg, 0.388)
+        self.assertEqual(cases[0].target_rho_pdb, 0.183)
+        self.assertEqual(cases[0].pdb_ms, 20)
+        self.assertIn(cases[0].background_user_count, {32, 40, 48})
+        self.assertIn(cases[0].background_packet_kb, {1.0, 1.5, 2.0})
+        self.assertGreaterEqual(cases[0].background_period_ms, 4.0)
+        self.assertLessEqual(cases[0].background_period_ms, 30.0)
+        self.assertAlmostEqual(cases[0].actual_rho_bg, 0.388, places=3)
+        self.assertAlmostEqual(cases[0].actual_rho_pdb, 0.183, places=3)
+
+    def test_rho_first_solver_prefers_anchor_values_on_error_tie(self) -> None:
+        if not hasattr(systematic_analysis, "solve_background_mapping"):
+            self.fail("solve_background_mapping should exist for rho-first load-ratio scans")
+        if not hasattr(systematic_analysis, "BackgroundMappingPolicy"):
+            self.fail("BackgroundMappingPolicy should exist for rho-first load-ratio scans")
+
+        selected = systematic_analysis.solve_background_mapping(
+            target_rho_bg=0.582,
+            background_capacity_mbps=66.03,
+            policy=systematic_analysis.BackgroundMappingPolicy(
+                background_user_count_values=[32, 40],
+                background_packet_kb_values=[1.5, 2.0],
+                background_period_ms_range=(4.0, 30.0),
+                anchor_background_user_count=40,
+                anchor_background_packet_kb=2.0,
+            ),
+        )
+
+        self.assertEqual(selected.background_user_count, 40)
+        self.assertEqual(selected.background_packet_kb, 2.0)
 
     def test_load_ratio_case_scene_key_remains_compatible_with_existing_pairing(self) -> None:
         case = LoadRatioCase(

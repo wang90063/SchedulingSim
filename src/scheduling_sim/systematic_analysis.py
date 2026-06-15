@@ -55,18 +55,98 @@ class SystematicCase:
 
 
 @dataclass(frozen=True)
+class BackgroundMappingPolicy:
+    background_user_count_values: list[int]
+    background_packet_kb_values: list[float]
+    background_period_ms_range: tuple[float, float]
+    anchor_background_user_count: int
+    anchor_background_packet_kb: float
+    kind: str = "candidate_domain_solve_period"
+
+
+@dataclass(frozen=True)
+class PdbMappingPolicy:
+    pdb_user_count_values: list[int]
+    pdb_packet_kb_range: tuple[float, float]
+    anchor_pdb_user_count: int
+    kind: str = "candidate_domain_solve_packet"
+
+
+@dataclass(frozen=True)
+class LoadRatioMappingPolicy:
+    background: BackgroundMappingPolicy
+    pdb: PdbMappingPolicy
+
+
+@dataclass(frozen=True)
+class BackgroundMappingResult:
+    background_user_count: int
+    background_packet_kb: float
+    background_period_ms: float
+    actual_rho_bg: float
+    mapping_policy: str
+
+
+@dataclass(frozen=True)
+class PdbMappingResult:
+    pdb_user_count: int
+    pdb_packet_kb: float
+    pdb_ms: int
+    actual_rho_pdb: float
+    mapping_policy: str
+
+
+@dataclass(frozen=True)
 class LoadRatioCase:
     case_label: str
     background_user_count: int
     background_packet_kb: float
-    background_period_ms: int
+    background_period_ms: float
     pdb_user_count: int
     pdb_packet_kb: float
     pdb_ms: int
-    rho_bg: float
-    rho_pdb: float
     prb_share_pdb: float
     g_pdb_mbps: float
+    target_rho_bg: float | None = None
+    target_rho_pdb: float | None = None
+    actual_rho_bg: float | None = None
+    actual_rho_pdb: float | None = None
+    rho_bg: float | None = None
+    rho_pdb: float | None = None
+    background_mapping_policy: str = ""
+    pdb_mapping_policy: str = ""
+
+    def __post_init__(self) -> None:
+        resolved_actual_rho_bg = (
+            self.actual_rho_bg
+            if self.actual_rho_bg is not None
+            else self.rho_bg
+            if self.rho_bg is not None
+            else self.target_rho_bg
+        )
+        resolved_actual_rho_pdb = (
+            self.actual_rho_pdb
+            if self.actual_rho_pdb is not None
+            else self.rho_pdb
+            if self.rho_pdb is not None
+            else self.target_rho_pdb
+        )
+        if resolved_actual_rho_bg is None or resolved_actual_rho_pdb is None:
+            raise ValueError("load-ratio cases require rho metadata")
+        object.__setattr__(self, "actual_rho_bg", float(resolved_actual_rho_bg))
+        object.__setattr__(self, "actual_rho_pdb", float(resolved_actual_rho_pdb))
+        object.__setattr__(
+            self,
+            "target_rho_bg",
+            float(self.target_rho_bg if self.target_rho_bg is not None else resolved_actual_rho_bg),
+        )
+        object.__setattr__(
+            self,
+            "target_rho_pdb",
+            float(self.target_rho_pdb if self.target_rho_pdb is not None else resolved_actual_rho_pdb),
+        )
+        object.__setattr__(self, "rho_bg", float(self.rho_bg if self.rho_bg is not None else resolved_actual_rho_bg))
+        object.__setattr__(self, "rho_pdb", float(self.rho_pdb if self.rho_pdb is not None else resolved_actual_rho_pdb))
 
 
 SceneFilter = Callable[[SystematicCase], bool]
@@ -101,9 +181,9 @@ def _background_offered_load_mbps(
     *,
     background_user_count: int,
     background_packet_kb: float,
-    background_period_ms: int,
+    background_period_ms: float,
 ) -> float:
-    if int(background_period_ms) <= 0:
+    if float(background_period_ms) <= 0.0:
         raise ValueError("background_period_ms must be > 0")
     return (float(background_user_count) * float(background_packet_kb) * 8.0) / float(background_period_ms)
 
@@ -119,7 +199,146 @@ def _pdb_offered_load_mbps(
     return (float(pdb_user_count) * float(pdb_packet_kb) * 8.0) / float(pdb_ms)
 
 
-def load_ratio_cases(
+def _round_to_tenth(value: float) -> float:
+    return round(float(value), 1)
+
+
+def solve_background_mapping(
+    *,
+    target_rho_bg: float,
+    background_capacity_mbps: float,
+    policy: BackgroundMappingPolicy,
+) -> BackgroundMappingResult:
+    if float(background_capacity_mbps) <= 0.0:
+        raise ValueError("background_capacity_mbps must be > 0")
+    if float(target_rho_bg) <= 0.0:
+        raise ValueError("target_rho_bg must be > 0")
+
+    target_load_mbps = float(target_rho_bg) * float(background_capacity_mbps)
+    min_period_ms, max_period_ms = policy.background_period_ms_range
+    candidates: list[tuple[float, tuple[int, float], float, BackgroundMappingResult]] = []
+    for background_user_count in policy.background_user_count_values:
+        for background_packet_kb in policy.background_packet_kb_values:
+            solved_period_ms = (
+                float(background_user_count) * float(background_packet_kb) * 8.0
+            ) / target_load_mbps
+            if not min_period_ms <= solved_period_ms <= max_period_ms:
+                continue
+            rounded_period_ms = _round_to_tenth(solved_period_ms)
+            if not min_period_ms <= rounded_period_ms <= max_period_ms:
+                continue
+            actual_rho_bg = _background_offered_load_mbps(
+                background_user_count=background_user_count,
+                background_packet_kb=background_packet_kb,
+                background_period_ms=rounded_period_ms,
+            ) / float(background_capacity_mbps)
+            candidates.append(
+                (
+                    abs(
+                        _background_offered_load_mbps(
+                            background_user_count=background_user_count,
+                            background_packet_kb=background_packet_kb,
+                            background_period_ms=solved_period_ms,
+                        )
+                        / float(background_capacity_mbps)
+                        - float(target_rho_bg)
+                    ),
+                    (
+                        abs(int(background_user_count) - int(policy.anchor_background_user_count)),
+                        abs(float(background_packet_kb) - float(policy.anchor_background_packet_kb)),
+                    ),
+                    abs(actual_rho_bg - float(target_rho_bg)),
+                    BackgroundMappingResult(
+                        background_user_count=int(background_user_count),
+                        background_packet_kb=float(background_packet_kb),
+                        background_period_ms=rounded_period_ms,
+                        actual_rho_bg=actual_rho_bg,
+                        mapping_policy=str(policy.kind),
+                    ),
+                )
+            )
+    if not candidates:
+        raise ValueError(f"no valid background mapping for target_rho_bg={target_rho_bg}")
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1][0],
+            item[1][1],
+            item[2],
+            item[3].background_user_count,
+            item[3].background_packet_kb,
+            item[3].background_period_ms,
+        )
+    )
+    return candidates[0][3]
+
+
+def solve_pdb_mapping(
+    *,
+    target_rho_pdb: float,
+    pdb_ms: int,
+    pdb_capacity_mbps: float,
+    policy: PdbMappingPolicy,
+) -> PdbMappingResult:
+    if int(pdb_ms) <= 0:
+        raise ValueError("pdb_ms must be > 0")
+    if float(pdb_capacity_mbps) <= 0.0:
+        raise ValueError("pdb_capacity_mbps must be > 0")
+    if float(target_rho_pdb) <= 0.0:
+        raise ValueError("target_rho_pdb must be > 0")
+
+    target_load_mbps = float(target_rho_pdb) * float(pdb_capacity_mbps)
+    min_packet_kb, max_packet_kb = policy.pdb_packet_kb_range
+    candidates: list[tuple[float, int, float, PdbMappingResult]] = []
+    for pdb_user_count in policy.pdb_user_count_values:
+        solved_packet_kb = (target_load_mbps * float(pdb_ms)) / (float(pdb_user_count) * 8.0)
+        if not min_packet_kb <= solved_packet_kb <= max_packet_kb:
+            continue
+        rounded_packet_kb = _round_to_tenth(solved_packet_kb)
+        if not min_packet_kb <= rounded_packet_kb <= max_packet_kb:
+            continue
+        actual_rho_pdb = _pdb_offered_load_mbps(
+            pdb_user_count=pdb_user_count,
+            pdb_packet_kb=rounded_packet_kb,
+            pdb_ms=pdb_ms,
+        ) / float(pdb_capacity_mbps)
+        candidates.append(
+            (
+                abs(
+                    _pdb_offered_load_mbps(
+                        pdb_user_count=pdb_user_count,
+                        pdb_packet_kb=solved_packet_kb,
+                        pdb_ms=pdb_ms,
+                    )
+                    / float(pdb_capacity_mbps)
+                    - float(target_rho_pdb)
+                ),
+                abs(int(pdb_user_count) - int(policy.anchor_pdb_user_count)),
+                abs(actual_rho_pdb - float(target_rho_pdb)),
+                PdbMappingResult(
+                    pdb_user_count=int(pdb_user_count),
+                    pdb_packet_kb=rounded_packet_kb,
+                    pdb_ms=int(pdb_ms),
+                    actual_rho_pdb=actual_rho_pdb,
+                    mapping_policy=str(policy.kind),
+                ),
+            )
+        )
+    if not candidates:
+        raise ValueError(f"no valid pdb mapping for target_rho_pdb={target_rho_pdb} pdb_ms={pdb_ms}")
+    candidates.sort(
+        key=lambda item: (
+            item[0],
+            item[1],
+            item[2],
+            item[3].pdb_user_count,
+            item[3].pdb_packet_kb,
+        )
+    )
+    return candidates[0][3]
+
+
+def _legacy_load_ratio_cases(
     *,
     background_user_count: int,
     background_period_ms: int,
@@ -170,10 +389,14 @@ def load_ratio_cases(
                         case_label=f"L{case_index:02d}",
                         background_user_count=background_user_count,
                         background_packet_kb=float(background_packet_kb),
-                        background_period_ms=background_period_ms,
+                        background_period_ms=float(background_period_ms),
                         pdb_user_count=pdb_user_count,
                         pdb_packet_kb=float(pdb_packet_kb),
                         pdb_ms=pdb_ms,
+                        target_rho_bg=rho_bg,
+                        target_rho_pdb=rho_pdb,
+                        actual_rho_bg=rho_bg,
+                        actual_rho_pdb=rho_pdb,
                         rho_bg=rho_bg,
                         rho_pdb=rho_pdb,
                         prb_share_pdb=prb_share_pdb,
@@ -182,6 +405,118 @@ def load_ratio_cases(
                 )
                 case_index += 1
     return cases
+
+
+def _rho_first_load_ratio_cases(
+    *,
+    rho_bg_values: list[float],
+    rho_pdb_values: list[float],
+    pdb_ms_values: list[int],
+    background_capacity_mbps: float,
+    pdb_capacity_mbps: float,
+    mapping_policy: LoadRatioMappingPolicy,
+) -> list[LoadRatioCase]:
+    if float(background_capacity_mbps) <= 0.0:
+        raise ValueError("background_capacity_mbps must be > 0")
+    if float(pdb_capacity_mbps) <= 0.0:
+        raise ValueError("pdb_capacity_mbps must be > 0")
+
+    cases: list[LoadRatioCase] = []
+    case_index = 1
+    for target_rho_bg in rho_bg_values:
+        background_mapping = solve_background_mapping(
+            target_rho_bg=float(target_rho_bg),
+            background_capacity_mbps=float(background_capacity_mbps),
+            policy=mapping_policy.background,
+        )
+        for target_rho_pdb in rho_pdb_values:
+            for pdb_ms in pdb_ms_values:
+                pdb_mapping = solve_pdb_mapping(
+                    target_rho_pdb=float(target_rho_pdb),
+                    pdb_ms=int(pdb_ms),
+                    pdb_capacity_mbps=float(pdb_capacity_mbps),
+                    policy=mapping_policy.pdb,
+                )
+                prb_share_pdb = (
+                    pdb_mapping.actual_rho_pdb / (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb)
+                    if (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb) > 0.0
+                    else 0.0
+                )
+                cases.append(
+                    LoadRatioCase(
+                        case_label=f"L{case_index:02d}",
+                        background_user_count=background_mapping.background_user_count,
+                        background_packet_kb=background_mapping.background_packet_kb,
+                        background_period_ms=background_mapping.background_period_ms,
+                        pdb_user_count=pdb_mapping.pdb_user_count,
+                        pdb_packet_kb=pdb_mapping.pdb_packet_kb,
+                        pdb_ms=pdb_mapping.pdb_ms,
+                        target_rho_bg=float(target_rho_bg),
+                        target_rho_pdb=float(target_rho_pdb),
+                        actual_rho_bg=background_mapping.actual_rho_bg,
+                        actual_rho_pdb=pdb_mapping.actual_rho_pdb,
+                        rho_bg=background_mapping.actual_rho_bg,
+                        rho_pdb=pdb_mapping.actual_rho_pdb,
+                        prb_share_pdb=prb_share_pdb,
+                        g_pdb_mbps=(float(pdb_mapping.pdb_packet_kb) * 8.0) / float(pdb_mapping.pdb_ms),
+                        background_mapping_policy=background_mapping.mapping_policy,
+                        pdb_mapping_policy=pdb_mapping.mapping_policy,
+                    )
+                )
+                case_index += 1
+    return cases
+
+
+def load_ratio_cases(
+    *,
+    rho_bg_values: list[float] | None = None,
+    rho_pdb_values: list[float] | None = None,
+    pdb_ms_values: list[int] | None = None,
+    background_capacity_mbps: float,
+    pdb_capacity_mbps: float,
+    mapping_policy: LoadRatioMappingPolicy | None = None,
+    background_user_count: int | None = None,
+    background_period_ms: int | None = None,
+    background_packet_kb_values: list[float] | None = None,
+    pdb_user_count: int | None = None,
+    pdb_shapes: list[dict[str, object]] | None = None,
+) -> list[LoadRatioCase]:
+    uses_rho_first = (
+        rho_bg_values is not None
+        or rho_pdb_values is not None
+        or pdb_ms_values is not None
+        or mapping_policy is not None
+    )
+    if uses_rho_first:
+        if rho_bg_values is None or rho_pdb_values is None or pdb_ms_values is None or mapping_policy is None:
+            raise ValueError("rho-first load-ratio scans require rho_bg_values, rho_pdb_values, pdb_ms_values, and mapping_policy")
+        return _rho_first_load_ratio_cases(
+            rho_bg_values=[float(value) for value in rho_bg_values],
+            rho_pdb_values=[float(value) for value in rho_pdb_values],
+            pdb_ms_values=[int(value) for value in pdb_ms_values],
+            background_capacity_mbps=float(background_capacity_mbps),
+            pdb_capacity_mbps=float(pdb_capacity_mbps),
+            mapping_policy=mapping_policy,
+        )
+    if (
+        background_user_count is None
+        or background_period_ms is None
+        or background_packet_kb_values is None
+        or pdb_user_count is None
+        or pdb_shapes is None
+    ):
+        raise ValueError(
+            "legacy load-ratio scans require background_user_count, background_period_ms, background_packet_kb_values, pdb_user_count, and pdb_shapes"
+        )
+    return _legacy_load_ratio_cases(
+        background_user_count=int(background_user_count),
+        background_period_ms=int(background_period_ms),
+        background_packet_kb_values=[float(value) for value in background_packet_kb_values],
+        pdb_user_count=int(pdb_user_count),
+        pdb_shapes=list(pdb_shapes),
+        background_capacity_mbps=float(background_capacity_mbps),
+        pdb_capacity_mbps=float(pdb_capacity_mbps),
+    )
 
 
 def _has_non_blank_value(row: dict[str, object], field_name: str) -> bool:

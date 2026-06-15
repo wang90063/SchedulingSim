@@ -54,6 +54,21 @@ class SystematicCase:
     pdb_packet_kb: int
 
 
+@dataclass(frozen=True)
+class LoadRatioCase:
+    case_label: str
+    background_user_count: int
+    background_packet_kb: float
+    background_period_ms: int
+    pdb_user_count: int
+    pdb_packet_kb: float
+    pdb_ms: int
+    rho_bg: float
+    rho_pdb: float
+    prb_share_pdb: float
+    g_pdb_mbps: float
+
+
 SceneFilter = Callable[[SystematicCase], bool]
 
 
@@ -82,6 +97,71 @@ def systematic_cases(
     return [case for case in cases if include_case(case)]
 
 
+def _background_offered_load_mbps(
+    *,
+    background_user_count: int,
+    background_packet_kb: float,
+    background_period_ms: int,
+) -> float:
+    return (float(background_user_count) * float(background_packet_kb) * 8.0) / float(background_period_ms)
+
+
+def _pdb_offered_load_mbps(
+    *,
+    pdb_user_count: int,
+    pdb_packet_kb: float,
+    pdb_ms: int,
+) -> float:
+    return (float(pdb_user_count) * float(pdb_packet_kb) * 8.0) / float(pdb_ms)
+
+
+def load_ratio_cases(
+    *,
+    background_user_count: int,
+    background_period_ms: int,
+    background_packet_kb_values: list[float],
+    pdb_user_count: int,
+    pdb_shapes: list[dict[str, object]],
+    background_capacity_mbps: float,
+    pdb_capacity_mbps: float,
+) -> list[LoadRatioCase]:
+    cases: list[LoadRatioCase] = []
+    case_index = 1
+    for background_packet_kb in background_packet_kb_values:
+        rho_bg = _background_offered_load_mbps(
+            background_user_count=background_user_count,
+            background_packet_kb=background_packet_kb,
+            background_period_ms=background_period_ms,
+        ) / float(background_capacity_mbps)
+        for shape in pdb_shapes:
+            pdb_ms = int(shape["pdb_ms"])
+            for pdb_packet_kb in [float(value) for value in shape["pdb_packet_kb_values"]]:
+                rho_pdb = _pdb_offered_load_mbps(
+                    pdb_user_count=pdb_user_count,
+                    pdb_packet_kb=pdb_packet_kb,
+                    pdb_ms=pdb_ms,
+                ) / float(pdb_capacity_mbps)
+                prb_share_pdb = rho_pdb / (rho_bg + rho_pdb) if (rho_bg + rho_pdb) > 0.0 else 0.0
+                g_pdb_mbps = (float(pdb_packet_kb) * 8.0) / float(pdb_ms)
+                cases.append(
+                    LoadRatioCase(
+                        case_label=f"L{case_index:02d}",
+                        background_user_count=background_user_count,
+                        background_packet_kb=float(background_packet_kb),
+                        background_period_ms=background_period_ms,
+                        pdb_user_count=pdb_user_count,
+                        pdb_packet_kb=float(pdb_packet_kb),
+                        pdb_ms=pdb_ms,
+                        rho_bg=rho_bg,
+                        rho_pdb=rho_pdb,
+                        prb_share_pdb=prb_share_pdb,
+                        g_pdb_mbps=g_pdb_mbps,
+                    )
+                )
+                case_index += 1
+    return cases
+
+
 def scene_key(row: dict[str, float | int | str]) -> tuple[int, int, int, int]:
     return (
         int(row["background_user_count"]),
@@ -93,6 +173,17 @@ def scene_key(row: dict[str, float | int | str]) -> tuple[int, int, int, int]:
 
 def scene_key_set(rows: list[dict[str, float | int | str]]) -> set[tuple[int, int, int, int]]:
     return {scene_key(row) for row in rows}
+
+
+def load_ratio_scene_key(case: LoadRatioCase) -> tuple[int, int, int, float, float, int]:
+    return (
+        int(case.background_user_count),
+        int(case.pdb_user_count),
+        int(case.pdb_ms),
+        float(case.pdb_packet_kb),
+        float(case.background_packet_kb),
+        int(case.background_period_ms),
+    )
 
 
 def merge_row_sets(

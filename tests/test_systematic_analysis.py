@@ -14,11 +14,14 @@ from scheduling_sim.config import (
     WirelessEnvConfig,
 )
 from scheduling_sim.systematic_analysis import (
+    LoadRatioCase,
     SceneBankSpec,
     SystematicCase,
     aggregate_scene_rows,
     build_boundary_feasibility_rows,
     build_realization_bank,
+    load_ratio_cases,
+    load_ratio_scene_key,
     build_systematic_case_users,
     build_typical_case_detail_rows,
     capacity_summary_rows,
@@ -149,6 +152,51 @@ class SystematicAnalysisTests(unittest.TestCase):
                 for case in cases
             ],
             [(16, 16, 100, 20), (24, 16, 100, 20)],
+        )
+
+    def test_load_ratio_cases_expand_to_expected_business_points(self) -> None:
+        cases = load_ratio_cases(
+            background_user_count=40,
+            background_period_ms=10,
+            background_packet_kb_values=[0.8, 1.2],
+            pdb_user_count=4,
+            pdb_shapes=[
+                {"pdb_ms": 100, "pdb_packet_kb_values": [5.0, 10.0]},
+                {"pdb_ms": 300, "pdb_packet_kb_values": [15.0]},
+            ],
+            background_capacity_mbps=66.03,
+            pdb_capacity_mbps=8.74,
+        )
+
+        self.assertEqual(len(cases), 6)
+        self.assertEqual(cases[0].background_user_count, 40)
+        self.assertEqual(cases[0].background_packet_kb, 0.8)
+        self.assertEqual(cases[0].pdb_user_count, 4)
+        self.assertEqual(cases[0].pdb_ms, 100)
+        self.assertEqual(cases[0].pdb_packet_kb, 5.0)
+        self.assertAlmostEqual(cases[0].rho_bg, 0.388, places=3)
+        self.assertAlmostEqual(cases[0].rho_pdb, 0.183, places=3)
+        self.assertAlmostEqual(cases[0].prb_share_pdb, 0.3206, places=3)
+        self.assertAlmostEqual(cases[0].g_pdb_mbps, 0.4, places=3)
+
+    def test_load_ratio_case_scene_key_remains_compatible_with_existing_pairing(self) -> None:
+        case = LoadRatioCase(
+            case_label="L01",
+            background_user_count=40,
+            background_packet_kb=0.8,
+            background_period_ms=10,
+            pdb_user_count=4,
+            pdb_packet_kb=5.0,
+            pdb_ms=100,
+            rho_bg=0.388,
+            rho_pdb=0.183,
+            prb_share_pdb=0.321,
+            g_pdb_mbps=0.4,
+        )
+
+        self.assertEqual(
+            load_ratio_scene_key(case),
+            (40, 4, 100, 5.0, 0.8, 10),
         )
 
     def test_scene_key_helpers_deduplicate_scene_rows(self) -> None:

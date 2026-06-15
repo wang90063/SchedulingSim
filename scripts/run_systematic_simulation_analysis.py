@@ -8,6 +8,9 @@ from scheduling_sim.config import load_config
 from scheduling_sim.metrics import MetricsCollector
 from scheduling_sim.simulator import UlSimulator
 from scheduling_sim.systematic_analysis import (
+    BackgroundMappingPolicy,
+    LoadRatioMappingPolicy,
+    PdbMappingPolicy,
     SceneBankSpec,
     aggregate_scene_rows,
     build_boundary_feasibility_rows,
@@ -172,11 +175,17 @@ def _enrich_reused_load_ratio_rows(
                     **row,
                     "case_label": str(getattr(case, "case_label")),
                     "background_packet_kb": float(getattr(case, "background_packet_kb")),
-                    "background_period_ms": int(getattr(case, "background_period_ms")),
+                    "background_period_ms": float(getattr(case, "background_period_ms")),
                     "rho_bg": float(getattr(case, "rho_bg")),
                     "rho_pdb": float(getattr(case, "rho_pdb")),
+                    "target_rho_bg": float(getattr(case, "target_rho_bg")),
+                    "target_rho_pdb": float(getattr(case, "target_rho_pdb")),
+                    "actual_rho_bg": float(getattr(case, "actual_rho_bg")),
+                    "actual_rho_pdb": float(getattr(case, "actual_rho_pdb")),
                     "prb_share_pdb": float(getattr(case, "prb_share_pdb")),
                     "g_pdb_mbps": float(getattr(case, "g_pdb_mbps")),
+                    "background_mapping_policy": str(getattr(case, "background_mapping_policy")),
+                    "pdb_mapping_policy": str(getattr(case, "pdb_mapping_policy")),
                 }
             )
             continue
@@ -225,6 +234,7 @@ def _load_ratio_summary_report(
     boundary_rows_95: list[dict[str, object]],
     boundary_rows_90: list[dict[str, object]],
 ) -> str:
+    is_rho_first = "rho_bg_values" in manifest and "rho_pdb_values" in manifest
     improved_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0]
     worsened_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) < 0.0]
     neutral_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) == 0.0]
@@ -249,11 +259,6 @@ def _load_ratio_summary_report(
         "## Load-Ratio Scan Matrix",
         "",
         f"- `scan_mode = {manifest['scan_mode']}`",
-        f"- `background_user_count = {manifest['background_user_count']}`",
-        f"- `background_period_ms = {manifest['background_period_ms']}`",
-        f"- `pdb_user_count = {manifest['pdb_user_count']}`",
-        f"- `background_packet_kb_values = {manifest['background_packet_kb_values']}`",
-        f"- `pdb_shapes = {manifest['pdb_shapes']}`",
         f"- `repeat_count = {manifest['repeat_count']}`",
         f"- Scene points evaluated: `{len(scene_rows)}`",
         f"- Paired realization rows: `{total_paired_realizations}`",
@@ -262,7 +267,6 @@ def _load_ratio_summary_report(
         "## Reporting Semantics",
         "",
         "- `scene_summary.csv` aggregates policy-paired results at each load-ratio scene point.",
-        "- `PDB` packet shape remains a secondary axis, so equal `rho_pdb` values can still be compared across different `pdb_ms` and packet-size combinations.",
         "- capacity summaries are omitted for load-ratio outputs because the legacy feasible-range tables assume user-count axes rather than ratio coordinates.",
         f"- boundary_feasibility_files: `{manifest['boundary_feasibility_files']}`",
         f"- representative_case_files: `{manifest['representative_case_files']}`",
@@ -278,6 +282,28 @@ def _load_ratio_summary_report(
         "| case_label | rho_bg | rho_pdb | prb_share_pdb | g_pdb_mbps | pdb_ms | pdb_packet_kb | baseline_pdb_satisfaction | proposed_pdb_satisfaction | delta_pdb_satisfaction | center_retention |",
         "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
     ]
+    if is_rho_first:
+        lines[11:11] = [
+            f"- `rho_bg_values = {manifest['rho_bg_values']}`",
+            f"- `rho_pdb_values = {manifest['rho_pdb_values']}`",
+            f"- `pdb_ms_values = {manifest['pdb_ms_values']}`",
+            f"- `mapping_policy = {manifest['mapping_policy']}`",
+        ]
+        lines[20:20] = [
+            "- Target `rho` values define the scan; business parameters are derived by the mapping policy and reported separately in the CSV outputs.",
+            "- `PDB` timing shape remains a secondary axis, so equal target `rho_pdb` values can still be compared across different `pdb_ms` realizations.",
+        ]
+    else:
+        lines[11:11] = [
+            f"- `background_user_count = {manifest['background_user_count']}`",
+            f"- `background_period_ms = {manifest['background_period_ms']}`",
+            f"- `pdb_user_count = {manifest['pdb_user_count']}`",
+            f"- `background_packet_kb_values = {manifest['background_packet_kb_values']}`",
+            f"- `pdb_shapes = {manifest['pdb_shapes']}`",
+        ]
+        lines[20:20] = [
+            "- `PDB` packet shape remains a secondary axis, so equal `rho_pdb` values can still be compared across different `pdb_ms` and packet-size combinations.",
+        ]
     for row in sorted(scene_rows, key=lambda item: str(item.get("case_label", ""))):
         lines.append(
             f"| {str(row.get('case_label', ''))} | {float(row['rho_bg']):.3f} | {float(row['rho_pdb']):.3f} | "
@@ -747,15 +773,49 @@ def main() -> int:
     include_case = _include_case_from_sweep(sweep)
     if scan_mode == "load_ratio":
         capacity_reference = dict(sweep["capacity_reference"])
-        all_cases = load_ratio_cases(
-            background_user_count=int(sweep["background_user_count"]),
-            background_period_ms=int(sweep["background_period_ms"]),
-            background_packet_kb_values=[float(value) for value in sweep["background_packet_kb_values"]],
-            pdb_user_count=int(sweep["pdb_user_count"]),
-            pdb_shapes=list(sweep["pdb_shapes"]),
-            background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
-            pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
-        )
+        if "rho_bg_values" in sweep:
+            background_policy_payload = dict(sweep["mapping_policy"]["background"])
+            pdb_policy_payload = dict(sweep["mapping_policy"]["pdb"])
+            mapping_policy = LoadRatioMappingPolicy(
+                background=BackgroundMappingPolicy(
+                    background_user_count_values=[
+                        int(value) for value in background_policy_payload["background_user_count_values"]
+                    ],
+                    background_packet_kb_values=[
+                        float(value) for value in background_policy_payload["background_packet_kb_values"]
+                    ],
+                    background_period_ms_range=tuple(
+                        float(value) for value in background_policy_payload["background_period_ms_range"]
+                    ),
+                    anchor_background_user_count=int(background_policy_payload["anchor_background_user_count"]),
+                    anchor_background_packet_kb=float(background_policy_payload["anchor_background_packet_kb"]),
+                    kind=str(background_policy_payload.get("kind", "candidate_domain_solve_period")),
+                ),
+                pdb=PdbMappingPolicy(
+                    pdb_user_count_values=[int(value) for value in pdb_policy_payload["pdb_user_count_values"]],
+                    pdb_packet_kb_range=tuple(float(value) for value in pdb_policy_payload["pdb_packet_kb_range"]),
+                    anchor_pdb_user_count=int(pdb_policy_payload["anchor_pdb_user_count"]),
+                    kind=str(pdb_policy_payload.get("kind", "candidate_domain_solve_packet")),
+                ),
+            )
+            all_cases = load_ratio_cases(
+                rho_bg_values=[float(value) for value in sweep["rho_bg_values"]],
+                rho_pdb_values=[float(value) for value in sweep["rho_pdb_values"]],
+                pdb_ms_values=[int(value) for value in sweep["pdb_ms_values"]],
+                background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
+                pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
+                mapping_policy=mapping_policy,
+            )
+        else:
+            all_cases = load_ratio_cases(
+                background_user_count=int(sweep["background_user_count"]),
+                background_period_ms=int(sweep["background_period_ms"]),
+                background_packet_kb_values=[float(value) for value in sweep["background_packet_kb_values"]],
+                pdb_user_count=int(sweep["pdb_user_count"]),
+                pdb_shapes=list(sweep["pdb_shapes"]),
+                background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
+                pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
+            )
         if include_case is not None:
             all_cases = [case for case in all_cases if include_case(case)]
         background_packet_bits_by_case = {
@@ -857,26 +917,65 @@ def main() -> int:
     final_output_dir = Path(str(sweep.get("merged_output_dir", output_dir)))
     manifest_sweep = dict(sweep)
     if scan_mode == "load_ratio":
-        manifest_sweep.update(
-            {
-                "background_user_count_values": [int(sweep["background_user_count"])],
-                "pdb_user_count_values": [int(sweep["pdb_user_count"])],
-                "pdb_ms_values": [int(shape["pdb_ms"]) for shape in sweep["pdb_shapes"]],
-                "pdb_packet_kb_values": [
-                    float(value)
-                    for shape in sweep["pdb_shapes"]
-                    for value in shape["pdb_packet_kb_values"]
-                ],
-                "background_packet_kb_values": [float(value) for value in sweep["background_packet_kb_values"]],
-                "pdb_shapes": [
-                    {
-                        "pdb_ms": int(shape["pdb_ms"]),
-                        "pdb_packet_kb_values": [float(value) for value in shape["pdb_packet_kb_values"]],
-                    }
-                    for shape in sweep["pdb_shapes"]
-                ],
-            }
-        )
+        if "rho_bg_values" in sweep:
+            manifest_sweep.update(
+                {
+                    "rho_bg_values": [float(value) for value in sweep["rho_bg_values"]],
+                    "rho_pdb_values": [float(value) for value in sweep["rho_pdb_values"]],
+                    "pdb_ms_values": [int(value) for value in sweep["pdb_ms_values"]],
+                    "mapping_policy": {
+                        "background": {
+                            "kind": str(sweep["mapping_policy"]["background"].get("kind", "candidate_domain_solve_period")),
+                            "background_user_count_values": [
+                                int(value) for value in sweep["mapping_policy"]["background"]["background_user_count_values"]
+                            ],
+                            "background_packet_kb_values": [
+                                float(value) for value in sweep["mapping_policy"]["background"]["background_packet_kb_values"]
+                            ],
+                            "background_period_ms_range": [
+                                float(value) for value in sweep["mapping_policy"]["background"]["background_period_ms_range"]
+                            ],
+                            "anchor_background_user_count": int(
+                                sweep["mapping_policy"]["background"]["anchor_background_user_count"]
+                            ),
+                            "anchor_background_packet_kb": float(
+                                sweep["mapping_policy"]["background"]["anchor_background_packet_kb"]
+                            ),
+                        },
+                        "pdb": {
+                            "kind": str(sweep["mapping_policy"]["pdb"].get("kind", "candidate_domain_solve_packet")),
+                            "pdb_user_count_values": [
+                                int(value) for value in sweep["mapping_policy"]["pdb"]["pdb_user_count_values"]
+                            ],
+                            "pdb_packet_kb_range": [
+                                float(value) for value in sweep["mapping_policy"]["pdb"]["pdb_packet_kb_range"]
+                            ],
+                            "anchor_pdb_user_count": int(sweep["mapping_policy"]["pdb"]["anchor_pdb_user_count"]),
+                        },
+                    },
+                }
+            )
+        else:
+            manifest_sweep.update(
+                {
+                    "background_user_count_values": [int(sweep["background_user_count"])],
+                    "pdb_user_count_values": [int(sweep["pdb_user_count"])],
+                    "pdb_ms_values": [int(shape["pdb_ms"]) for shape in sweep["pdb_shapes"]],
+                    "pdb_packet_kb_values": [
+                        float(value)
+                        for shape in sweep["pdb_shapes"]
+                        for value in shape["pdb_packet_kb_values"]
+                    ],
+                    "background_packet_kb_values": [float(value) for value in sweep["background_packet_kb_values"]],
+                    "pdb_shapes": [
+                        {
+                            "pdb_ms": int(shape["pdb_ms"]),
+                            "pdb_packet_kb_values": [float(value) for value in shape["pdb_packet_kb_values"]],
+                        }
+                        for shape in sweep["pdb_shapes"]
+                    ],
+                }
+            )
     manifest = {
         **manifest_sweep,
         "scan_mode": scan_mode,

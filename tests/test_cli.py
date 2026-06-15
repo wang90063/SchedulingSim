@@ -1092,6 +1092,74 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual({row["case_label"] for row in per_run_rows}, {"L01", "L02", "L03", "L04"})
             self.assertEqual(len({row["scenario_id"] for row in per_run_rows}), 4)
 
+    def test_systematic_simulation_analysis_runner_supports_rho_first_load_ratio_config(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "load_ratio_rho_first.json"
+            output_dir = Path(tmp) / "load-ratio-rho-first-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"] = {
+                "mode": "load_ratio",
+                "rho_bg_values": [0.388],
+                "rho_pdb_values": [0.183],
+                "pdb_ms_values": [20, 100],
+                "repeat_count": 1,
+                "random_seed_base": 7,
+                "baseline_policy": "tail_append",
+                "ours_policy": "hopeless_front_insert",
+                "scene_bank": {
+                    "medium_distance_range_m": [170.0, 230.0],
+                    "good_distance_range_m": [80.0, 140.0],
+                    "poor_distance_range_m": [390.0, 470.0],
+                },
+                "capacity_reference": {
+                    "background_capacity_mbps": 66.03,
+                    "pdb_capacity_mbps": 8.74,
+                },
+                "mapping_policy": {
+                    "background": {
+                        "kind": "candidate_domain_solve_period",
+                        "background_user_count_values": [32, 40, 48],
+                        "background_packet_kb_values": [1.0, 1.5, 2.0],
+                        "background_period_ms_range": [4.0, 30.0],
+                        "anchor_background_user_count": 40,
+                        "anchor_background_packet_kb": 2.0,
+                    },
+                    "pdb": {
+                        "kind": "candidate_domain_solve_packet",
+                        "pdb_user_count_values": [4, 8],
+                        "pdb_packet_kb_range": [0.5, 80.0],
+                        "anchor_pdb_user_count": 4,
+                    },
+                },
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["scan_mode"], "load_ratio")
+            self.assertEqual(manifest["rho_bg_values"], [0.388])
+            self.assertEqual(manifest["rho_pdb_values"], [0.183])
+            self.assertEqual(manifest["pdb_ms_values"], [20, 100])
+            with (output_dir / "per_run_rows.csv").open("r", encoding="utf-8", newline="") as handle:
+                per_run_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(per_run_rows), 4)
+            self.assertEqual({row["case_label"] for row in per_run_rows}, {"L01", "L02"})
+            self.assertEqual({row["target_rho_bg"] for row in per_run_rows}, {"0.388"})
+            self.assertEqual({row["target_rho_pdb"] for row in per_run_rows}, {"0.183"})
+
     def test_systematic_simulation_analysis_runner_writes_load_ratio_summary_report(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:

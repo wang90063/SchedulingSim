@@ -29,6 +29,7 @@ from scheduling_sim.systematic_analysis import (
     paired_metric_row,
     partition_region,
     per_run_metric_row,
+    scene_key,
     scene_key_set,
     select_typical_case_rows,
     summarize_regions,
@@ -169,6 +170,25 @@ class SystematicAnalysisTests(unittest.TestCase):
         )
 
         self.assertEqual(len(cases), 6)
+        self.assertEqual([case.case_label for case in cases], ["L01", "L02", "L03", "L04", "L05", "L06"])
+        self.assertEqual(
+            [
+                (
+                    case.background_packet_kb,
+                    case.pdb_ms,
+                    case.pdb_packet_kb,
+                )
+                for case in cases
+            ],
+            [
+                (0.8, 100, 5.0),
+                (0.8, 100, 10.0),
+                (0.8, 300, 15.0),
+                (1.2, 100, 5.0),
+                (1.2, 100, 10.0),
+                (1.2, 300, 15.0),
+            ],
+        )
         self.assertEqual(cases[0].background_user_count, 40)
         self.assertEqual(cases[0].background_packet_kb, 0.8)
         self.assertEqual(cases[0].pdb_user_count, 4)
@@ -197,6 +217,89 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(
             load_ratio_scene_key(case),
             (40, 4, 100, 5.0, 0.8, 10),
+        )
+
+    def test_scene_key_uses_load_ratio_fields_when_present(self) -> None:
+        row_a = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+            "background_packet_kb": 0.8,
+            "background_period_ms": 10,
+        }
+        row_b = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+            "background_packet_kb": 1.2,
+            "background_period_ms": 10,
+        }
+        legacy_row = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+        }
+
+        self.assertEqual(scene_key(row_a), (40, 4, 100, 5.0, 0.8, 10))
+        self.assertEqual(scene_key(row_b), (40, 4, 100, 5.0, 1.2, 10))
+        self.assertEqual(scene_key(legacy_row), (40, 4, 100, 5))
+
+    def test_scene_key_set_keeps_distinct_load_ratio_rows_and_preserves_legacy_dedupe(self) -> None:
+        rows = [
+            {
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "seed": 7,
+            },
+            {
+                "background_user_count": 24,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 50,
+                "seed": 8,
+            },
+            {
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 0.8,
+                "background_period_ms": 10,
+                "seed": 7,
+            },
+            {
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 1.2,
+                "background_period_ms": 10,
+                "seed": 8,
+            },
+            {
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 0.8,
+                "background_period_ms": 20,
+                "seed": 9,
+            },
+        ]
+
+        self.assertEqual(
+            scene_key_set(rows),
+            {
+                (24, 4, 100, 50),
+                (40, 4, 100, 5.0, 0.8, 10),
+                (40, 4, 100, 5.0, 1.2, 10),
+                (40, 4, 100, 5.0, 0.8, 20),
+            },
         )
 
     def test_scene_key_helpers_deduplicate_scene_rows(self) -> None:

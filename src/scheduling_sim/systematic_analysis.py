@@ -162,7 +162,18 @@ def load_ratio_cases(
     return cases
 
 
-def scene_key(row: dict[str, float | int | str]) -> tuple[int, int, int, int]:
+def scene_key(
+    row: dict[str, float | int | str],
+) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, int]:
+    if "background_packet_kb" in row and "background_period_ms" in row:
+        return (
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            float(row["pdb_packet_kb"]),
+            float(row["background_packet_kb"]),
+            int(row["background_period_ms"]),
+        )
     return (
         int(row["background_user_count"]),
         int(row["pdb_user_count"]),
@@ -171,7 +182,9 @@ def scene_key(row: dict[str, float | int | str]) -> tuple[int, int, int, int]:
     )
 
 
-def scene_key_set(rows: list[dict[str, float | int | str]]) -> set[tuple[int, int, int, int]]:
+def scene_key_set(
+    rows: list[dict[str, float | int | str]],
+) -> set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]]:
     return {scene_key(row) for row in rows}
 
 

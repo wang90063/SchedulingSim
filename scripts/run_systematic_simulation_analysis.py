@@ -15,6 +15,7 @@ from scheduling_sim.systematic_analysis import (
     build_systematic_case_users,
     build_typical_case_detail_rows,
     capacity_summary_rows,
+    load_ratio_cases,
     merge_row_sets,
     paired_metric_row,
     per_run_metric_row,
@@ -402,18 +403,38 @@ def main() -> int:
 
     baseline_policy = str(sweep["baseline_policy"])
     ours_policy = str(sweep["ours_policy"])
-    background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
+    scan_mode = str(sweep.get("mode", "legacy_grid"))
     reuse_output_dirs = [str(value) for value in sweep.get("reuse_output_dirs", [])]
     existing_raw_summaries = _reuse_raw_summaries(reuse_output_dirs)
     existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(reuse_output_dirs)
     include_case = _include_case_from_sweep(sweep)
-    all_cases = systematic_cases(
-        background_user_counts=list(sweep["background_user_count_values"]),
-        pdb_user_counts=list(sweep["pdb_user_count_values"]),
-        pdb_ms_values=list(sweep["pdb_ms_values"]),
-        pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
-        include_case=include_case,
-    )
+    if scan_mode == "load_ratio":
+        capacity_reference = dict(sweep["capacity_reference"])
+        all_cases = load_ratio_cases(
+            background_user_count=int(sweep["background_user_count"]),
+            background_period_ms=int(sweep["background_period_ms"]),
+            background_packet_kb_values=[float(value) for value in sweep["background_packet_kb_values"]],
+            pdb_user_count=int(sweep["pdb_user_count"]),
+            pdb_shapes=list(sweep["pdb_shapes"]),
+            background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
+            pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
+        )
+        if include_case is not None:
+            all_cases = [case for case in all_cases if include_case(case)]
+        background_packet_bits_by_case = {
+            str(case.case_label): int(round(float(case.background_packet_kb) * 1000.0 * 8.0))
+            for case in all_cases
+        }
+    else:
+        all_cases = systematic_cases(
+            background_user_counts=list(sweep["background_user_count_values"]),
+            pdb_user_counts=list(sweep["pdb_user_count_values"]),
+            pdb_ms_values=list(sweep["pdb_ms_values"]),
+            pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
+            include_case=include_case,
+        )
+        background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
+        background_packet_bits_by_case = {str(scene_key(case.__dict__)): background_packet_bits for case in all_cases}
     cases_to_run = [case for case in all_cases if scene_key(case.__dict__) not in reused_scene_keys]
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []
@@ -423,10 +444,14 @@ def main() -> int:
         bank_seed = int(sweep["random_seed_base"]) + repeat_index
         bank = build_realization_bank(base_config, scene_bank_spec=scene_bank_spec, bank_seed=bank_seed)
         for case in cases_to_run:
+            case_label = str(getattr(case, "case_label", ""))
             scenario_id = (
                 f"bg{case.background_user_count}_pdb{case.pdb_user_count}_"
                 f"d{case.pdb_ms}_k{case.pdb_packet_kb}_seed{repeat_index:02d}"
             )
+            case_background_packet_bits = background_packet_bits_by_case[
+                case_label if case_label else str(scene_key(case.__dict__))
+            ]
             summaries_by_policy: dict[str, dict[str, float]] = {}
             for policy in (baseline_policy, ours_policy):
                 case_config = replace(
@@ -440,8 +465,8 @@ def main() -> int:
                     background_user_count=case.background_user_count,
                     pdb_user_count=case.pdb_user_count,
                     pdb_ms=case.pdb_ms,
-                    pdb_packet_bits=int(case.pdb_packet_kb) * 1000 * 8,
-                    background_packet_bits=background_packet_bits,
+                    pdb_packet_bits=int(round(float(case.pdb_packet_kb) * 1000.0 * 8.0)),
+                    background_packet_bits=case_background_packet_bits,
                 )
                 collector = MetricsCollector()
                 summary = UlSimulator(case_config, users, collector).run()
@@ -453,24 +478,26 @@ def main() -> int:
                         "summary": summary,
                     }
                 )
-                per_run_rows.append(
-                    per_run_metric_row(
-                        scenario_id=scenario_id,
-                        seed=bank_seed,
-                        policy=policy,
-                        case=case,
-                        summary=summary,
-                    )
-                )
-                summaries_by_policy[policy] = summary
-            paired_rows.append(
-                paired_metric_row(
-                    case=case,
+                per_run_row = per_run_metric_row(
+                    scenario_id=scenario_id,
                     seed=bank_seed,
-                    baseline_summary=summaries_by_policy[baseline_policy],
-                    proposed_summary=summaries_by_policy[ours_policy],
+                    policy=policy,
+                    case=case,
+                    summary=summary,
                 )
+                if case_label:
+                    per_run_row["case_label"] = case_label
+                per_run_rows.append(per_run_row)
+                summaries_by_policy[policy] = summary
+            paired_row = paired_metric_row(
+                case=case,
+                seed=bank_seed,
+                baseline_summary=summaries_by_policy[baseline_policy],
+                proposed_summary=summaries_by_policy[ours_policy],
             )
+            if case_label:
+                paired_row["case_label"] = case_label
+            paired_rows.append(paired_row)
 
     merged_per_run_rows = merge_row_sets(existing_rows=existing_per_run_rows, new_rows=per_run_rows)
     merged_paired_rows = merge_row_sets(existing_rows=existing_paired_rows, new_rows=paired_rows)
@@ -489,8 +516,31 @@ def main() -> int:
     boundary_rows_95 = build_boundary_feasibility_rows(scene_rows, threshold=0.95)
     boundary_rows_90 = build_boundary_feasibility_rows(scene_rows, threshold=0.90)
     final_output_dir = Path(str(sweep.get("merged_output_dir", output_dir)))
+    manifest_sweep = dict(sweep)
+    if scan_mode == "load_ratio":
+        manifest_sweep.update(
+            {
+                "background_user_count_values": [int(sweep["background_user_count"])],
+                "pdb_user_count_values": [int(sweep["pdb_user_count"])],
+                "pdb_ms_values": [int(shape["pdb_ms"]) for shape in sweep["pdb_shapes"]],
+                "pdb_packet_kb_values": [
+                    float(value)
+                    for shape in sweep["pdb_shapes"]
+                    for value in shape["pdb_packet_kb_values"]
+                ],
+                "background_packet_kb_values": [float(value) for value in sweep["background_packet_kb_values"]],
+                "pdb_shapes": [
+                    {
+                        "pdb_ms": int(shape["pdb_ms"]),
+                        "pdb_packet_kb_values": [float(value) for value in shape["pdb_packet_kb_values"]],
+                    }
+                    for shape in sweep["pdb_shapes"]
+                ],
+            }
+        )
     manifest = {
-        **sweep,
+        **manifest_sweep,
+        "scan_mode": scan_mode,
         "reference_config": str(config_path),
         "scene_bank_counts": {
             "medium": scene_bank_spec.medium_count,

@@ -107,7 +107,7 @@ It remains a derived descriptor of class pressure mix.
 
 `PDB` shape remains a small explicit secondary axis:
 
-- `pdb_ms_values = [100, 300, 500]`
+- `pdb_ms_values = [20, 50, 100, 300, 500]`
 
 This preserves the earlier design intent: the same `rho_pdb` can be realized under different `PDB` timing shapes.
 
@@ -117,11 +117,11 @@ The first pass keeps the already-approved ratio coordinates:
 
 - `rho_bg_values = [0.388, 0.582, 0.775, 0.969]`
 - `rho_pdb_values = [0.183, 0.366, 0.549]`
-- `pdb_ms_values = [100, 300, 500]`
+- `pdb_ms_values = [20, 50, 100, 300, 500]`
 
 This still yields:
 
-- `4 × 3 × 3 = 36` scene points
+- `4 × 3 × 5 = 60` scene points
 
 The difference is that these are now the **input definition**, not a description of one specific parameterization.
 
@@ -145,33 +145,47 @@ Each class needs a policy that turns target load into concrete business paramete
 
 ### Background Mapping Policy
 
-Use:
+Use a **candidate-domain solver**, not a single fixed template.
 
-- fixed `background_user_count = 40`
-- fixed `background_packet_kb = 2.0`
-- solve for `background_period_ms`
+The background mapper enumerates:
 
-This policy is chosen because it keeps the background packet model stable while letting load vary through arrival density.
+- `background_user_count ∈ {32, 40, 48}`
+- `background_packet_kb ∈ {1.0, 1.5, 2.0}`
 
-The mapping is:
+and solves for:
+
+- `background_period_ms`
+
+using:
 
 - `L_bg = rho_bg × C_bg`
 - `background_period_ms = background_user_count × background_packet_kb × 8 / L_bg`
 
-So for this first pass, target `rho_bg` points approximately map to:
+This policy is chosen because:
 
-- `0.388 -> 16.5 ms`
-- `0.582 -> 11.0 ms`
-- `0.775 -> 8.3 ms`
-- `0.969 -> 6.6 ms`
+- the scan is still defined in `rho` space
+- business realization remains flexible
+- the background packet model does not have to be artificially fixed to one template
 
-The implementation may round these values according to simulator constraints, but the resulting actual scene must record both target and actual values.
+For reference, if the mapper used the anchor pair:
+
+- `background_user_count = 40`
+- `background_packet_kb = 2.0`
+
+then the target `rho_bg` points would approximately imply:
+
+- `0.388 -> 25.0 ms`
+- `0.582 -> 16.7 ms`
+- `0.775 -> 12.5 ms`
+- `0.969 -> 10.0 ms`
+
+These values are examples only, not the scan definition.
 
 ### PDB Mapping Policy
 
 Use:
 
-- fixed `pdb_user_count = 4`
+- candidate `pdb_user_count ∈ {4, 8}`
 - fixed `pdb_ms`
 - solve for `pdb_packet_kb`
 
@@ -182,22 +196,34 @@ The mapping is:
 
 This keeps the earlier shape axis while defining it from `rho_pdb` instead of choosing packet sizes first.
 
-For the first pass, the target `rho_pdb` points approximately map to:
+The first pass expands the `PDB` shape axis to:
+
+- `pdb_ms_values = [20, 50, 100, 300, 500]`
+
+Using the anchor choice `pdb_user_count = 4`, the target `rho_pdb` points would approximately imply:
 
 - `rho_pdb = 0.183`
+  - `20 ms -> 1 KB`
+  - `50 ms -> 2.5 KB`
   - `100 ms -> 5 KB`
   - `300 ms -> 15 KB`
   - `500 ms -> 25 KB`
 - `rho_pdb = 0.366`
+  - `20 ms -> 2 KB`
+  - `50 ms -> 5 KB`
   - `100 ms -> 10 KB`
   - `300 ms -> 30 KB`
   - `500 ms -> 50 KB`
 - `rho_pdb = 0.549`
+  - `20 ms -> 3 KB`
+  - `50 ms -> 7.5 KB`
   - `100 ms -> 15 KB`
   - `300 ms -> 45 KB`
   - `500 ms -> 75 KB`
 
-### Why Only One Mapping Policy In This Pass
+These values are examples only, not the scan definition.
+
+### Why Only One Mapping Policy Family In This Pass
 
 The point of this change is to separate:
 
@@ -212,6 +238,54 @@ Multiple mapping policies may be useful later, but they would multiply the scene
 - how sensitive is that gain to business realization style
 
 This pass should answer the first question only.
+
+The candidate domains above do not create new scan axes. They only provide the solver with a bounded set of acceptable business realizations for each target `rho` point.
+
+## Candidate Domains And Solver Rules
+
+### Candidate Domains
+
+The first pass uses these realization domains:
+
+- `background_user_count ∈ {32, 40, 48}`
+- `background_packet_kb ∈ {1.0, 1.5, 2.0}`
+- `pdb_user_count ∈ {4, 8}`
+- `pdb_ms ∈ {20, 50, 100, 300, 500}`
+
+Only `pdb_ms` is part of the scene definition. The other three are candidate inputs available to the mapper.
+
+### Validity Constraints
+
+The mapper must reject candidate realizations unless all of the following hold:
+
+- `background_period_ms ∈ [4, 30]`
+- `pdb_packet_kb ∈ [0.5, 80.0]`
+
+These bounds are not theoretical limits. They are practical guardrails to avoid obviously unrealistic or unhelpful realizations in this pass.
+
+### Selection Rule
+
+For each target scene point:
+
+1. enumerate all candidate background realizations
+2. enumerate all candidate `PDB` realizations for the requested `pdb_ms`
+3. round each realizable parameter to simulator-compatible values
+4. recompute `actual_rho_bg` and `actual_rho_pdb`
+5. choose the valid pair with the smallest total ratio error
+
+where total ratio error is:
+
+- `abs(actual_rho_bg - target_rho_bg) + abs(actual_rho_pdb - target_rho_pdb)`
+
+### Tie-Break Preference
+
+If multiple realizations have the same error, prefer the one closest to these anchor values:
+
+- `background_user_count = 40`
+- `background_packet_kb = 2.0`
+- `pdb_user_count = 4`
+
+This keeps the first pass deterministic and preserves comparability without redefining the scan around a single hard-coded business template.
 
 ## Scene Record Requirements
 
@@ -285,13 +359,18 @@ The first-pass mapping-policy section should look conceptually like:
 {
   "mapping_policy": {
     "background": {
-      "kind": "fixed_users_fixed_packet_solve_period",
-      "background_user_count": 40,
-      "background_packet_kb": 2.0
+      "kind": "candidate_domain_solve_period",
+      "background_user_count_values": [32, 40, 48],
+      "background_packet_kb_values": [1.0, 1.5, 2.0],
+      "background_period_ms_range": [4, 30],
+      "anchor_background_user_count": 40,
+      "anchor_background_packet_kb": 2.0
     },
     "pdb": {
-      "kind": "fixed_users_fixed_pdb_solve_packet",
-      "pdb_user_count": 4
+      "kind": "candidate_domain_solve_packet",
+      "pdb_user_count_values": [4, 8],
+      "pdb_packet_kb_range": [0.5, 80.0],
+      "anchor_pdb_user_count": 4
     }
   }
 }
@@ -330,7 +409,7 @@ This design is successful if:
 1. the scan is defined directly in `rho` space
 2. each `rho` point maps to concrete simulator inputs through an explicit policy
 3. outputs expose both target and actual ratio coordinates
-4. the first pass still runs the same 36 intended scene points
+4. the first pass runs the intended `4 × 3 × 5 = 60` ratio-defined scene points
 5. later work can add alternative mapping policies without redefining the meaning of the scan itself
 
 ## Out of Scope

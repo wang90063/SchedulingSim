@@ -837,10 +837,13 @@ def build_boundary_feasibility_rows(
 
 
 def capacity_summary_rows(
-    scene_rows: list[dict[str, float | int]],
+    scene_rows: list[dict[str, float | int | str]],
     *,
     threshold: float,
 ) -> list[dict[str, float | int | str]]:
+    if any(_has_load_ratio_key_fields(row) for row in scene_rows):
+        return []
+
     rows: list[dict[str, float | int | str]] = []
     by_background: dict[tuple[int, int, int], list[dict[str, float | int]]] = {}
     by_pdb_users: dict[tuple[int, int, int], list[dict[str, float | int]]] = {}

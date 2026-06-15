@@ -1163,6 +1163,92 @@ class CliSmokeTests(unittest.TestCase):
             merged_raw_summaries = json.loads((merged_output_dir / "raw_summaries.json").read_text(encoding="utf-8"))
             self.assertEqual(len(merged_raw_summaries), 4)
 
+    def test_systematic_simulation_analysis_runner_reuses_pre_metadata_load_ratio_rows(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            reused_dir = Path(tmp) / "reused-load-ratio"
+            reused_dir.mkdir(parents=True, exist_ok=True)
+            _write_nr_ul_main_table(Path(tmp), repo_root)
+            (reused_dir / "raw_summaries.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "seed": 7,
+                            "scenario_id": "bg40_pdb4_d100_k5.0_seed00_L01",
+                            "policy": "tail_append",
+                            "summary": {"edge_pdb_satisfaction_rate": 0.4},
+                        },
+                        {
+                            "seed": 7,
+                            "scenario_id": "bg40_pdb4_d100_k5.0_seed00_L01",
+                            "policy": "hopeless_front_insert",
+                            "summary": {"edge_pdb_satisfaction_rate": 0.6},
+                        },
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            (reused_dir / "per_run_rows.csv").write_text(
+                "seed,scenario_id,policy,case_label,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,edge_pdb_satisfaction_rate,center_agg_rate_bps,center_avg_rate_bps,prb_utilization,center_prb_share,edge_prb_share,pdb_arrivals_in_window,pdb_violation_rate,target_edge_completion_delay_ms,target_edge_queue_wait_ms,target_edge_service_time_ms,edge_backlog_bits\n"
+                "7,bg40_pdb4_d100_k5.0_seed00_L01,tail_append,L01,40,4,100,5.0,0.4,1000.0,25.0,0.9,0.7,0.3,4.0,0.6,90.0,60.0,30.0,0.0\n"
+                "7,bg40_pdb4_d100_k5.0_seed00_L01,hopeless_front_insert,L01,40,4,100,5.0,0.6,950.0,23.75,0.9,0.68,0.32,4.0,0.4,80.0,50.0,30.0,0.0\n",
+                encoding="utf-8",
+            )
+            (reused_dir / "paired_rows.csv").write_text(
+                "seed,case_label,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,baseline_edge_pdb_satisfaction_rate,proposed_edge_pdb_satisfaction_rate,delta_pdb_satisfaction_rate,center_throughput_retention,delta_prb_utilization,delta_center_prb_share,delta_edge_prb_share\n"
+                "7,L01,40,4,100,5.0,0.4,0.6,0.2,0.95,0.0,-0.02,0.02\n",
+                encoding="utf-8",
+            )
+            config_path = Path(tmp) / "load_ratio_reuse.json"
+            output_dir = Path(tmp) / "load-ratio-reuse-output"
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"] = {
+                "mode": "load_ratio",
+                "background_user_count": 40,
+                "background_period_ms": 10,
+                "background_packet_kb_values": [0.8],
+                "pdb_user_count": 4,
+                "pdb_shapes": [{"pdb_ms": 100, "pdb_packet_kb_values": [5.0]}],
+                "repeat_count": 1,
+                "random_seed_base": 7,
+                "baseline_policy": "tail_append",
+                "ours_policy": "hopeless_front_insert",
+                "reuse_output_dirs": [str(reused_dir)],
+                "merged_output_dir": str(output_dir),
+                "scene_bank": {
+                    "medium_distance_range_m": [170.0, 230.0],
+                    "good_distance_range_m": [80.0, 140.0],
+                    "poor_distance_range_m": [390.0, 470.0],
+                },
+                "capacity_reference": {
+                    "background_capacity_mbps": 66.03,
+                    "pdb_capacity_mbps": 8.74,
+                },
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["reused_scene_point_count"], 1)
+            self.assertEqual(manifest["new_scene_point_count"], 0)
+            self.assertEqual(manifest["final_scene_point_count"], 1)
+            with (output_dir / "scene_summary.csv").open("r", encoding="utf-8", newline="") as handle:
+                scene_rows = list(csv.DictReader(handle))
+            self.assertEqual(len(scene_rows), 1)
+            self.assertEqual(scene_rows[0]["background_packet_kb"], "0.8")
+            self.assertEqual(scene_rows[0]["background_period_ms"], "10")
+
     def test_systematic_simulation_analysis_renderer_runs_on_runner_output(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:

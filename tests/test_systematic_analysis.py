@@ -793,6 +793,26 @@ class SystematicAnalysisTests(unittest.TestCase):
         dimensions = {row["dimension"] for row in rows}
         self.assertEqual(dimensions, {"fixed_background_user_count", "fixed_pdb_user_count"})
 
+    def test_capacity_summary_rows_skips_load_ratio_scene_rows(self) -> None:
+        rows = capacity_summary_rows(
+            [
+                {
+                    "case_label": "L01",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 0.8,
+                    "background_period_ms": 10,
+                    "baseline_edge_pdb_satisfaction_rate": 0.95,
+                    "proposed_edge_pdb_satisfaction_rate": 0.97,
+                }
+            ],
+            threshold=0.95,
+        )
+
+        self.assertEqual(rows, [])
+
     def test_select_typical_case_rows_labels_key_scene_points(self) -> None:
         rows = select_typical_case_rows(
             [

@@ -115,14 +115,80 @@ def _reuse_raw_summaries(reuse_output_dirs: list[str]) -> list[dict[str, object]
     return raw_summaries
 
 
-def _reuse_rows(reuse_output_dirs: list[str]) -> tuple[list[dict[str, object]], list[dict[str, object]], set[tuple[int, int, int, int]]]:
+def _case_legacy_key(case: object) -> tuple[int, int, int, int]:
+    return (
+        int(getattr(case, "background_user_count")),
+        int(getattr(case, "pdb_user_count")),
+        int(getattr(case, "pdb_ms")),
+        int(round(float(getattr(case, "pdb_packet_kb")))),
+    )
+
+
+def _enrich_reused_load_ratio_rows(
+    rows: list[dict[str, object]],
+    *,
+    load_ratio_cases_to_match: list[object],
+) -> list[dict[str, object]]:
+    legacy_key_to_cases: dict[tuple[int, int, int, int], list[object]] = {}
+    for case in load_ratio_cases_to_match:
+        legacy_key_to_cases.setdefault(_case_legacy_key(case), []).append(case)
+
+    enriched_rows: list[dict[str, object]] = []
+    for row in rows:
+        if "background_packet_kb" in row and "background_period_ms" in row:
+            enriched_rows.append(row)
+            continue
+        legacy_key = (
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            int(round(float(row["pdb_packet_kb"]))),
+        )
+        matching_cases = legacy_key_to_cases.get(legacy_key, [])
+        if len(matching_cases) == 1:
+            case = matching_cases[0]
+            enriched_rows.append(
+                {
+                    **row,
+                    "case_label": str(getattr(case, "case_label")),
+                    "background_packet_kb": float(getattr(case, "background_packet_kb")),
+                    "background_period_ms": int(getattr(case, "background_period_ms")),
+                    "rho_bg": float(getattr(case, "rho_bg")),
+                    "rho_pdb": float(getattr(case, "rho_pdb")),
+                    "prb_share_pdb": float(getattr(case, "prb_share_pdb")),
+                    "g_pdb_mbps": float(getattr(case, "g_pdb_mbps")),
+                }
+            )
+            continue
+        enriched_rows.append(row)
+    return enriched_rows
+
+
+def _reuse_rows(
+    reuse_output_dirs: list[str],
+    *,
+    load_ratio_cases_to_match: list[object] | None = None,
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]],
+]:
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []
-    scene_keys: set[tuple[int, int, int, int]] = set()
+    scene_keys: set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]] = set()
     for directory in reuse_output_dirs:
         reuse_dir = Path(directory)
         reuse_per_run_rows = _read_table(reuse_dir / "per_run_rows.csv")
         reuse_paired_rows = _read_table(reuse_dir / "paired_rows.csv")
+        if load_ratio_cases_to_match is not None:
+            reuse_per_run_rows = _enrich_reused_load_ratio_rows(
+                reuse_per_run_rows,
+                load_ratio_cases_to_match=load_ratio_cases_to_match,
+            )
+            reuse_paired_rows = _enrich_reused_load_ratio_rows(
+                reuse_paired_rows,
+                load_ratio_cases_to_match=load_ratio_cases_to_match,
+            )
         per_run_rows.extend(reuse_per_run_rows)
         paired_rows.extend(reuse_paired_rows)
         scene_keys |= scene_key_set(reuse_paired_rows)
@@ -406,7 +472,6 @@ def main() -> int:
     scan_mode = str(sweep.get("mode", "legacy_grid"))
     reuse_output_dirs = [str(value) for value in sweep.get("reuse_output_dirs", [])]
     existing_raw_summaries = _reuse_raw_summaries(reuse_output_dirs)
-    existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(reuse_output_dirs)
     include_case = _include_case_from_sweep(sweep)
     if scan_mode == "load_ratio":
         capacity_reference = dict(sweep["capacity_reference"])
@@ -435,6 +500,10 @@ def main() -> int:
         )
         background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
         background_packet_bits_by_case = {str(scene_key(case.__dict__)): background_packet_bits for case in all_cases}
+    existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(
+        reuse_output_dirs,
+        load_ratio_cases_to_match=all_cases if scan_mode == "load_ratio" else None,
+    )
     cases_to_run = [case for case in all_cases if scene_key(case.__dict__) not in reused_scene_keys]
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []

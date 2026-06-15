@@ -115,6 +115,15 @@ def _reuse_raw_summaries(reuse_output_dirs: list[str]) -> list[dict[str, object]
     return raw_summaries
 
 
+def _has_non_blank_value(row: dict[str, object], field_name: str) -> bool:
+    if field_name not in row:
+        return False
+    value = row[field_name]
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
+
+
 def _case_legacy_key(case: object) -> tuple[int, int, int, int]:
     return (
         int(getattr(case, "background_user_count")),
@@ -135,7 +144,7 @@ def _enrich_reused_load_ratio_rows(
 
     enriched_rows: list[dict[str, object]] = []
     for row in rows:
-        if "background_packet_kb" in row and "background_period_ms" in row:
+        if _has_non_blank_value(row, "background_packet_kb") and _has_non_blank_value(row, "background_period_ms"):
             enriched_rows.append(row)
             continue
         legacy_key = (

@@ -1092,6 +1092,61 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual({row["case_label"] for row in per_run_rows}, {"L01", "L02", "L03", "L04"})
             self.assertEqual(len({row["scenario_id"] for row in per_run_rows}), 4)
 
+    def test_systematic_simulation_analysis_runner_writes_load_ratio_summary_report(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "load_ratio_report.json"
+            output_dir = Path(tmp) / "load-ratio-report-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"] = {
+                "mode": "load_ratio",
+                "background_user_count": 40,
+                "background_period_ms": 10,
+                "background_packet_kb_values": [0.8],
+                "pdb_user_count": 4,
+                "pdb_shapes": [
+                    {"pdb_ms": 100, "pdb_packet_kb_values": [5.0, 10.0]},
+                    {"pdb_ms": 300, "pdb_packet_kb_values": [15.0]},
+                ],
+                "repeat_count": 1,
+                "random_seed_base": 7,
+                "baseline_policy": "tail_append",
+                "ours_policy": "hopeless_front_insert",
+                "scene_bank": {
+                    "medium_distance_range_m": [170.0, 230.0],
+                    "good_distance_range_m": [80.0, 140.0],
+                    "poor_distance_range_m": [390.0, 470.0],
+                },
+                "capacity_reference": {
+                    "background_capacity_mbps": 66.03,
+                    "pdb_capacity_mbps": 8.74,
+                },
+            }
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            report_text = (output_dir / "summary_report.md").read_text(encoding="utf-8")
+            self.assertIn("`scan_mode = load_ratio`", report_text)
+            self.assertIn("`PDB` packet shape remains a secondary axis", report_text)
+            self.assertIn("| case_label | rho_bg | rho_pdb | prb_share_pdb |", report_text)
+            self.assertIn("| L01 |", report_text)
+            self.assertIn("| L02 |", report_text)
+            self.assertIn("| L03 |", report_text)
+            self.assertIn("capacity summaries are omitted for load-ratio outputs", report_text)
+            self.assertNotIn("background_user_count_values", report_text)
+
     def test_systematic_simulation_analysis_runner_reuses_existing_scene_keys_and_merges_outputs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:

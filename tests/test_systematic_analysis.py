@@ -289,6 +289,57 @@ class SystematicAnalysisTests(unittest.TestCase):
                 }
             )
 
+        with self.assertRaisesRegex(
+            ValueError,
+            "load-ratio rows require both background_packet_kb and background_period_ms",
+        ):
+            scene_key(
+                {
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": "",
+                    "background_period_ms": 10,
+                }
+            )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "load-ratio rows require both background_packet_kb and background_period_ms",
+        ):
+            scene_key(
+                {
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 0.8,
+                    "background_period_ms": "",
+                }
+            )
+
+    def test_scene_key_treats_blank_load_ratio_metadata_as_missing(self) -> None:
+        legacy_blank_row = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+            "background_packet_kb": "",
+            "background_period_ms": "",
+        }
+        spaced_blank_row = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+            "background_packet_kb": "  ",
+            "background_period_ms": "   ",
+        }
+
+        self.assertEqual(scene_key(legacy_blank_row), (40, 4, 100, 5))
+        self.assertEqual(scene_key(spaced_blank_row), (40, 4, 100, 5))
+
     def test_scene_key_set_keeps_distinct_load_ratio_rows_and_preserves_legacy_dedupe(self) -> None:
         rows = [
             {
@@ -385,6 +436,51 @@ class SystematicAnalysisTests(unittest.TestCase):
                 background_packet_kb_values=[0.8],
                 pdb_user_count=4,
                 pdb_shapes=[{"pdb_ms": 100, "pdb_packet_kb_values": [5.0]}],
+                background_capacity_mbps=66.03,
+                pdb_capacity_mbps=0.0,
+            )
+
+    def test_load_ratio_cases_validates_denominators_eagerly_for_empty_inputs(self) -> None:
+        with self.assertRaisesRegex(ValueError, "background_period_ms must be > 0"):
+            load_ratio_cases(
+                background_user_count=40,
+                background_period_ms=0,
+                background_packet_kb_values=[],
+                pdb_user_count=4,
+                pdb_shapes=[{"pdb_ms": 100, "pdb_packet_kb_values": [5.0]}],
+                background_capacity_mbps=66.03,
+                pdb_capacity_mbps=8.74,
+            )
+
+        with self.assertRaisesRegex(ValueError, "background_capacity_mbps must be > 0"):
+            load_ratio_cases(
+                background_user_count=40,
+                background_period_ms=10,
+                background_packet_kb_values=[],
+                pdb_user_count=4,
+                pdb_shapes=[{"pdb_ms": 100, "pdb_packet_kb_values": [5.0]}],
+                background_capacity_mbps=0.0,
+                pdb_capacity_mbps=8.74,
+            )
+
+        with self.assertRaisesRegex(ValueError, "pdb_ms must be > 0"):
+            load_ratio_cases(
+                background_user_count=40,
+                background_period_ms=10,
+                background_packet_kb_values=[0.8],
+                pdb_user_count=4,
+                pdb_shapes=[{"pdb_ms": 0, "pdb_packet_kb_values": []}],
+                background_capacity_mbps=66.03,
+                pdb_capacity_mbps=8.74,
+            )
+
+        with self.assertRaisesRegex(ValueError, "pdb_capacity_mbps must be > 0"):
+            load_ratio_cases(
+                background_user_count=40,
+                background_period_ms=10,
+                background_packet_kb_values=[0.8],
+                pdb_user_count=4,
+                pdb_shapes=[{"pdb_ms": 100, "pdb_packet_kb_values": []}],
                 background_capacity_mbps=66.03,
                 pdb_capacity_mbps=0.0,
             )

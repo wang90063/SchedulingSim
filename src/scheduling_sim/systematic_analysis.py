@@ -129,10 +129,23 @@ def load_ratio_cases(
     background_capacity_mbps: float,
     pdb_capacity_mbps: float,
 ) -> list[LoadRatioCase]:
+    if int(background_period_ms) <= 0:
+        raise ValueError("background_period_ms must be > 0")
     if float(background_capacity_mbps) <= 0.0:
         raise ValueError("background_capacity_mbps must be > 0")
     if float(pdb_capacity_mbps) <= 0.0:
         raise ValueError("pdb_capacity_mbps must be > 0")
+
+    normalized_pdb_shapes = [
+        {
+            "pdb_ms": int(shape["pdb_ms"]),
+            "pdb_packet_kb_values": [float(value) for value in shape["pdb_packet_kb_values"]],
+        }
+        for shape in pdb_shapes
+    ]
+    for shape in normalized_pdb_shapes:
+        if int(shape["pdb_ms"]) <= 0:
+            raise ValueError("pdb_ms must be > 0")
 
     cases: list[LoadRatioCase] = []
     case_index = 1
@@ -142,9 +155,9 @@ def load_ratio_cases(
             background_packet_kb=background_packet_kb,
             background_period_ms=background_period_ms,
         ) / float(background_capacity_mbps)
-        for shape in pdb_shapes:
+        for shape in normalized_pdb_shapes:
             pdb_ms = int(shape["pdb_ms"])
-            for pdb_packet_kb in [float(value) for value in shape["pdb_packet_kb_values"]]:
+            for pdb_packet_kb in shape["pdb_packet_kb_values"]:
                 rho_pdb = _pdb_offered_load_mbps(
                     pdb_user_count=pdb_user_count,
                     pdb_packet_kb=pdb_packet_kb,
@@ -174,8 +187,16 @@ def load_ratio_cases(
 def scene_key(
     row: dict[str, float | int | str],
 ) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, int]:
-    has_background_packet_kb = "background_packet_kb" in row
-    has_background_period_ms = "background_period_ms" in row
+    def _has_non_blank_value(field_name: str) -> bool:
+        if field_name not in row:
+            return False
+        value = row[field_name]
+        if isinstance(value, str):
+            return value.strip() != ""
+        return True
+
+    has_background_packet_kb = _has_non_blank_value("background_packet_kb")
+    has_background_period_ms = _has_non_blank_value("background_period_ms")
     if has_background_packet_kb and has_background_period_ms:
         return (
             int(row["background_user_count"]),

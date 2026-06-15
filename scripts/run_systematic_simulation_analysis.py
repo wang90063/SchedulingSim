@@ -449,6 +449,8 @@ def main() -> int:
                 f"bg{case.background_user_count}_pdb{case.pdb_user_count}_"
                 f"d{case.pdb_ms}_k{case.pdb_packet_kb}_seed{repeat_index:02d}"
             )
+            if case_label:
+                scenario_id = f"{scenario_id}_{case_label}"
             case_background_packet_bits = background_packet_bits_by_case[
                 case_label if case_label else str(scene_key(case.__dict__))
             ]

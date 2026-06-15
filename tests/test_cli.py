@@ -1052,7 +1052,7 @@ class CliSmokeTests(unittest.TestCase):
                 "mode": "load_ratio",
                 "background_user_count": 40,
                 "background_period_ms": 10,
-                "background_packet_kb_values": [0.8],
+                "background_packet_kb_values": [0.8, 1.2],
                 "pdb_user_count": 4,
                 "pdb_shapes": [
                     {"pdb_ms": 100, "pdb_packet_kb_values": [5.0, 10.0]},
@@ -1084,12 +1084,13 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, msg=result.stderr)
             manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
             self.assertEqual(manifest["scan_mode"], "load_ratio")
-            self.assertEqual(manifest["background_packet_kb_values"], [0.8])
+            self.assertEqual(manifest["background_packet_kb_values"], [0.8, 1.2])
             self.assertEqual(manifest["pdb_shapes"], [{"pdb_ms": 100, "pdb_packet_kb_values": [5.0, 10.0]}])
             with (output_dir / "per_run_rows.csv").open("r", encoding="utf-8", newline="") as handle:
                 per_run_rows = list(csv.DictReader(handle))
-            self.assertEqual(len(per_run_rows), 4)
-            self.assertEqual({row["case_label"] for row in per_run_rows}, {"L01", "L02"})
+            self.assertEqual(len(per_run_rows), 8)
+            self.assertEqual({row["case_label"] for row in per_run_rows}, {"L01", "L02", "L03", "L04"})
+            self.assertEqual(len({row["scenario_id"] for row in per_run_rows}), 4)
 
     def test_systematic_simulation_analysis_runner_reuses_existing_scene_keys_and_merges_outputs(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

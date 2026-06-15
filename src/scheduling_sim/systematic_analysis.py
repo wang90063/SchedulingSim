@@ -103,6 +103,8 @@ def _background_offered_load_mbps(
     background_packet_kb: float,
     background_period_ms: int,
 ) -> float:
+    if int(background_period_ms) <= 0:
+        raise ValueError("background_period_ms must be > 0")
     return (float(background_user_count) * float(background_packet_kb) * 8.0) / float(background_period_ms)
 
 
@@ -112,6 +114,8 @@ def _pdb_offered_load_mbps(
     pdb_packet_kb: float,
     pdb_ms: int,
 ) -> float:
+    if int(pdb_ms) <= 0:
+        raise ValueError("pdb_ms must be > 0")
     return (float(pdb_user_count) * float(pdb_packet_kb) * 8.0) / float(pdb_ms)
 
 
@@ -125,6 +129,11 @@ def load_ratio_cases(
     background_capacity_mbps: float,
     pdb_capacity_mbps: float,
 ) -> list[LoadRatioCase]:
+    if float(background_capacity_mbps) <= 0.0:
+        raise ValueError("background_capacity_mbps must be > 0")
+    if float(pdb_capacity_mbps) <= 0.0:
+        raise ValueError("pdb_capacity_mbps must be > 0")
+
     cases: list[LoadRatioCase] = []
     case_index = 1
     for background_packet_kb in background_packet_kb_values:
@@ -165,7 +174,9 @@ def load_ratio_cases(
 def scene_key(
     row: dict[str, float | int | str],
 ) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, int]:
-    if "background_packet_kb" in row and "background_period_ms" in row:
+    has_background_packet_kb = "background_packet_kb" in row
+    has_background_period_ms = "background_period_ms" in row
+    if has_background_packet_kb and has_background_period_ms:
         return (
             int(row["background_user_count"]),
             int(row["pdb_user_count"]),
@@ -174,6 +185,8 @@ def scene_key(
             float(row["background_packet_kb"]),
             int(row["background_period_ms"]),
         )
+    if has_background_packet_kb or has_background_period_ms:
+        raise ValueError("load-ratio rows require both background_packet_kb and background_period_ms")
     return (
         int(row["background_user_count"]),
         int(row["pdb_user_count"]),

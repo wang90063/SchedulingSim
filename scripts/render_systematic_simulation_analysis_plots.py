@@ -18,9 +18,11 @@ def _rows(path: Path) -> list[dict[str, str]]:
 def ratio_axis_labels(output_dir: Path) -> dict[str, str]:
     manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
     if str(manifest.get("scan_mode", "")) == "load_ratio":
+        x_label = "target_rho_bg" if "rho_bg_values" in manifest else "rho_bg"
+        y_label = "target_rho_pdb" if "rho_pdb_values" in manifest else "rho_pdb"
         return {
-            "x_label": "rho_bg",
-            "y_label": "rho_pdb",
+            "x_label": x_label,
+            "y_label": y_label,
             "panel_label": "pdb_ms / pdb_packet_kb",
             "size_label": "prb_share_pdb",
         }
@@ -129,16 +131,36 @@ def _ratio_scene_value(
     rho_bg: float,
     rho_pdb: float,
     field_name: str,
+    x_field: str,
+    y_field: str,
 ) -> float:
     for row in rows:
         if (
             int(row["pdb_ms"]) == pdb_ms
             and math.isclose(float(row["pdb_packet_kb"]), pdb_packet_kb, rel_tol=0.0, abs_tol=1e-9)
-            and math.isclose(float(row["rho_bg"]), rho_bg, rel_tol=0.0, abs_tol=1e-9)
-            and math.isclose(float(row["rho_pdb"]), rho_pdb, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(float(row[x_field]), rho_bg, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(float(row[y_field]), rho_pdb, rel_tol=0.0, abs_tol=1e-9)
         ):
             return float(row[field_name])
     return math.nan
+
+
+def _ratio_fields(manifest: dict[str, object], rows: list[dict[str, str]]) -> tuple[str, str]:
+    if str(manifest.get("scan_mode", "")) != "load_ratio":
+        raise ValueError("ratio fields are only valid for load-ratio manifests")
+    if "rho_bg_values" in manifest and rows and "target_rho_bg" in rows[0] and "target_rho_pdb" in rows[0]:
+        return ("target_rho_bg", "target_rho_pdb")
+    return ("rho_bg", "rho_pdb")
+
+
+def _ratio_shape_pairs(manifest: dict[str, object], rows: list[dict[str, str]]) -> list[tuple[int, float]]:
+    if "pdb_shapes" in manifest:
+        return [
+            (int(shape["pdb_ms"]), float(packet_kb))
+            for shape in manifest["pdb_shapes"]
+            for packet_kb in shape["pdb_packet_kb_values"]
+        ]
+    return sorted({(int(row["pdb_ms"]), float(row["pdb_packet_kb"])) for row in rows})
 
 
 def _ratio_grid(
@@ -149,13 +171,10 @@ def _ratio_grid(
     title: str,
     output_path: Path,
 ) -> None:
-    shape_pairs = [
-        (int(shape["pdb_ms"]), float(packet_kb))
-        for shape in manifest["pdb_shapes"]
-        for packet_kb in shape["pdb_packet_kb_values"]
-    ]
-    rho_bg_values = sorted({float(row["rho_bg"]) for row in rows})
-    rho_pdb_values = sorted({float(row["rho_pdb"]) for row in rows})
+    shape_pairs = _ratio_shape_pairs(manifest, rows)
+    x_field, y_field = _ratio_fields(manifest, rows)
+    rho_bg_values = sorted({float(row[x_field]) for row in rows})
+    rho_pdb_values = sorted({float(row[y_field]) for row in rows})
     fig, axes = plt.subplots(
         1,
         len(shape_pairs),
@@ -178,6 +197,8 @@ def _ratio_grid(
                     rho_bg=rho_bg,
                     rho_pdb=rho_pdb,
                     field_name=field_name,
+                    x_field=x_field,
+                    y_field=y_field,
                 )
                 if math.isnan(metric_value):
                     continue
@@ -186,8 +207,8 @@ def _ratio_grid(
                     for row in rows
                     if int(row["pdb_ms"]) == pdb_ms
                     and math.isclose(float(row["pdb_packet_kb"]), packet_kb, rel_tol=0.0, abs_tol=1e-9)
-                    and math.isclose(float(row["rho_bg"]), rho_bg, rel_tol=0.0, abs_tol=1e-9)
-                    and math.isclose(float(row["rho_pdb"]), rho_pdb, rel_tol=0.0, abs_tol=1e-9)
+                    and math.isclose(float(row[x_field]), rho_bg, rel_tol=0.0, abs_tol=1e-9)
+                    and math.isclose(float(row[y_field]), rho_pdb, rel_tol=0.0, abs_tol=1e-9)
                 )
                 x_values.append(rho_bg)
                 y_values.append(rho_pdb)
@@ -203,8 +224,8 @@ def _ratio_grid(
             linewidths=0.5,
         )
         ax.set_title(f"PDB {pdb_ms} ms / {packet_kb:g} KB")
-        ax.set_xlabel("rho_bg")
-        ax.set_ylabel("rho_pdb")
+        ax.set_xlabel(x_field)
+        ax.set_ylabel(y_field)
         ax.set_xticks(rho_bg_values, labels=[f"{value:.3f}" for value in rho_bg_values], rotation=20, ha="right")
         ax.set_yticks(rho_pdb_values, labels=[f"{value:.3f}" for value in rho_pdb_values])
         if x_values and y_values:
@@ -300,13 +321,10 @@ def _ratio_boundary_plot(
     threshold: float,
     output_path: Path,
 ) -> None:
-    shape_pairs = [
-        (int(shape["pdb_ms"]), float(packet_kb))
-        for shape in manifest["pdb_shapes"]
-        for packet_kb in shape["pdb_packet_kb_values"]
-    ]
-    rho_bg_values = sorted({float(row["rho_bg"]) for row in boundary_rows})
-    rho_pdb_values = sorted({float(row["rho_pdb"]) for row in boundary_rows})
+    shape_pairs = _ratio_shape_pairs(manifest, boundary_rows)
+    x_field, y_field = _ratio_fields(manifest, boundary_rows)
+    rho_bg_values = sorted({float(row[x_field]) for row in boundary_rows})
+    rho_pdb_values = sorted({float(row[y_field]) for row in boundary_rows})
     fig, axes = plt.subplots(
         1,
         len(shape_pairs),
@@ -331,8 +349,8 @@ def _ratio_boundary_plot(
             if baseline_feasible == 0 and proposed_feasible == 1:
                 color = "#2ca02c"
             ax.scatter(
-                float(row["rho_bg"]),
-                float(row["rho_pdb"]),
+                float(row[x_field]),
+                float(row[y_field]),
                 s=max(float(row["prb_share_pdb"]) * 800.0, 60.0),
                 c=color,
                 marker=marker,
@@ -340,8 +358,8 @@ def _ratio_boundary_plot(
                 linewidths=0.5,
             )
         ax.set_title(f"PDB {pdb_ms} ms / {packet_kb:g} KB")
-        ax.set_xlabel("rho_bg")
-        ax.set_ylabel("rho_pdb")
+        ax.set_xlabel(x_field)
+        ax.set_ylabel(y_field)
         ax.set_xticks(rho_bg_values, labels=[f"{value:.3f}" for value in rho_bg_values], rotation=20, ha="right")
         ax.set_yticks(rho_pdb_values, labels=[f"{value:.3f}" for value in rho_pdb_values])
     fig.suptitle(f"Feasible Region Comparison @ {threshold:.0%} (marker size = prb_share_pdb)")

@@ -46,6 +46,26 @@ class SystematicAnalysisPlotTests(unittest.TestCase):
             self.assertEqual(labels["y_label"], "rho_pdb")
             self.assertEqual(labels["size_label"], "prb_share_pdb")
 
+    def test_renderer_uses_target_ratio_axes_for_rho_first_outputs(self) -> None:
+        module = _load_render_module()
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "experiment_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "scan_mode": "load_ratio",
+                        "rho_bg_values": [0.388, 0.582],
+                        "rho_pdb_values": [0.183, 0.366],
+                        "pdb_ms_values": [20, 100],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            labels = module.ratio_axis_labels(output_dir)
+            self.assertEqual(labels["x_label"], "target_rho_bg")
+            self.assertEqual(labels["y_label"], "target_rho_pdb")
+            self.assertEqual(labels["size_label"], "prb_share_pdb")
+
     def test_grid_value_returns_nan_for_missing_scene_points(self) -> None:
         module = _load_render_module()
         rows = [

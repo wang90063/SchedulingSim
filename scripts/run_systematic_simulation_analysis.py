@@ -487,8 +487,6 @@ def main() -> int:
                     case=case,
                     summary=summary,
                 )
-                if case_label:
-                    per_run_row["case_label"] = case_label
                 per_run_rows.append(per_run_row)
                 summaries_by_policy[policy] = summary
             paired_row = paired_metric_row(
@@ -497,8 +495,6 @@ def main() -> int:
                 baseline_summary=summaries_by_policy[baseline_policy],
                 proposed_summary=summaries_by_policy[ours_policy],
             )
-            if case_label:
-                paired_row["case_label"] = case_label
             paired_rows.append(paired_row)
 
     merged_per_run_rows = merge_row_sets(existing_rows=existing_per_run_rows, new_rows=per_run_rows)

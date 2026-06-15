@@ -539,6 +539,48 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(row["policy"], "tail_append")
         self.assertEqual(row["pdb_arrivals_in_window"], 8.0)
 
+    def test_per_run_metric_row_includes_load_ratio_metadata(self) -> None:
+        row = per_run_metric_row(
+            scenario_id="load-ratio-case",
+            seed=7,
+            policy="tail_append",
+            case=LoadRatioCase(
+                case_label="L01",
+                background_user_count=40,
+                background_packet_kb=0.8,
+                background_period_ms=10,
+                pdb_user_count=4,
+                pdb_packet_kb=5.0,
+                pdb_ms=100,
+                rho_bg=0.388,
+                rho_pdb=0.183,
+                prb_share_pdb=0.321,
+                g_pdb_mbps=0.4,
+            ),
+            summary={
+                "edge_pdb_satisfaction_rate": 0.5,
+                "center_agg_rate_bps": 1.0,
+                "center_avg_rate_bps": 1.0,
+                "prb_utilization": 0.5,
+                "center_prb_share": 0.4,
+                "edge_prb_share": 0.6,
+                "pdb_arrivals_in_window": 4.0,
+                "pdb_violation_rate": 0.5,
+                "target_edge_completion_delay_ms": 80.0,
+                "target_edge_queue_wait_ms": 60.0,
+                "target_edge_service_time_ms": 20.0,
+                "edge_backlog_bits": 0.0,
+            },
+        )
+
+        self.assertEqual(row["case_label"], "L01")
+        self.assertEqual(row["background_packet_kb"], 0.8)
+        self.assertEqual(row["background_period_ms"], 10)
+        self.assertEqual(row["rho_bg"], 0.388)
+        self.assertEqual(row["rho_pdb"], 0.183)
+        self.assertEqual(row["prb_share_pdb"], 0.321)
+        self.assertEqual(row["g_pdb_mbps"], 0.4)
+
     def test_paired_metric_row_computes_gain_and_retention(self) -> None:
         row = paired_metric_row(
             case=self._simple_case(),
@@ -560,6 +602,46 @@ class SystematicAnalysisTests(unittest.TestCase):
         )
         self.assertEqual(row["delta_pdb_satisfaction_rate"], 0.2)
         self.assertEqual(row["center_throughput_retention"], 0.9)
+
+    def test_paired_metric_row_includes_load_ratio_metadata(self) -> None:
+        row = paired_metric_row(
+            case=LoadRatioCase(
+                case_label="L01",
+                background_user_count=40,
+                background_packet_kb=0.8,
+                background_period_ms=10,
+                pdb_user_count=4,
+                pdb_packet_kb=5.0,
+                pdb_ms=100,
+                rho_bg=0.388,
+                rho_pdb=0.183,
+                prb_share_pdb=0.321,
+                g_pdb_mbps=0.4,
+            ),
+            seed=3,
+            baseline_summary={
+                "edge_pdb_satisfaction_rate": 0.6,
+                "center_agg_rate_bps": 1000.0,
+                "prb_utilization": 0.50,
+                "center_prb_share": 0.70,
+                "edge_prb_share": 0.30,
+            },
+            proposed_summary={
+                "edge_pdb_satisfaction_rate": 0.8,
+                "center_agg_rate_bps": 900.0,
+                "prb_utilization": 0.55,
+                "center_prb_share": 0.66,
+                "edge_prb_share": 0.34,
+            },
+        )
+
+        self.assertEqual(row["case_label"], "L01")
+        self.assertEqual(row["background_packet_kb"], 0.8)
+        self.assertEqual(row["background_period_ms"], 10)
+        self.assertEqual(row["rho_bg"], 0.388)
+        self.assertEqual(row["rho_pdb"], 0.183)
+        self.assertEqual(row["prb_share_pdb"], 0.321)
+        self.assertEqual(row["g_pdb_mbps"], 0.4)
 
     def test_aggregate_scene_rows_computes_mean_std_and_ci(self) -> None:
         rows = aggregate_scene_rows(
@@ -595,6 +677,58 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(rows[0]["mean_delta_pdb_satisfaction_rate"], 0.20)
         self.assertEqual(rows[0]["std_delta_pdb_satisfaction_rate"], 0.0)
         self.assertGreaterEqual(rows[0]["ci95_center_throughput_retention"], 0.0)
+
+    def test_aggregate_scene_rows_keeps_distinct_load_ratio_rows(self) -> None:
+        rows = aggregate_scene_rows(
+            [
+                {
+                    "case_label": "L01",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 0.8,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.388,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.321,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.60,
+                    "proposed_edge_pdb_satisfaction_rate": 0.80,
+                    "delta_pdb_satisfaction_rate": 0.20,
+                    "center_throughput_retention": 0.90,
+                    "delta_prb_utilization": 0.05,
+                    "delta_center_prb_share": -0.04,
+                    "delta_edge_prb_share": 0.04,
+                },
+                {
+                    "case_label": "L02",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 1.2,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.582,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.239,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.50,
+                    "proposed_edge_pdb_satisfaction_rate": 0.70,
+                    "delta_pdb_satisfaction_rate": 0.20,
+                    "center_throughput_retention": 0.80,
+                    "delta_prb_utilization": 0.02,
+                    "delta_center_prb_share": -0.03,
+                    "delta_edge_prb_share": 0.03,
+                },
+            ]
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {(row["case_label"], row["background_packet_kb"]) for row in rows},
+            {("L01", 0.8), ("L02", 1.2)},
+        )
 
     def test_partition_region_uses_baseline_satisfaction_thresholds(self) -> None:
         self.assertEqual(partition_region(0.97), "feasible")
@@ -698,6 +832,84 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertIn("easy", labels)
         self.assertIn("critical", labels)
         self.assertIn("overloaded", labels)
+
+    def test_select_typical_case_rows_keeps_distinct_load_ratio_scene_points(self) -> None:
+        rows = select_typical_case_rows(
+            [
+                {
+                    "case_label": "L01",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 0.8,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.388,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.321,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.98,
+                    "proposed_edge_pdb_satisfaction_rate": 0.99,
+                    "mean_delta_pdb_satisfaction_rate": 0.01,
+                    "mean_center_throughput_retention": 0.99,
+                },
+                {
+                    "case_label": "L02",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 1.2,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.582,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.239,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.70,
+                    "proposed_edge_pdb_satisfaction_rate": 0.90,
+                    "mean_delta_pdb_satisfaction_rate": 0.20,
+                    "mean_center_throughput_retention": 0.93,
+                },
+                {
+                    "case_label": "L03",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 1.6,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.776,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.191,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.20,
+                    "proposed_edge_pdb_satisfaction_rate": 0.35,
+                    "mean_delta_pdb_satisfaction_rate": 0.15,
+                    "mean_center_throughput_retention": 0.91,
+                },
+                {
+                    "case_label": "L04",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 2.0,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.970,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.159,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.65,
+                    "proposed_edge_pdb_satisfaction_rate": 0.85,
+                    "mean_delta_pdb_satisfaction_rate": 0.10,
+                    "mean_center_throughput_retention": 0.89,
+                },
+            ]
+        )
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual({row["case_label"] for row in rows}, {"easy", "critical", "overloaded", "high_cost"})
+        self.assertEqual({row["background_packet_kb"] for row in rows}, {0.8, 1.2, 1.6, 2.0})
 
     def test_build_typical_case_detail_rows_expands_each_selected_case_to_per_policy_rows(self) -> None:
         scene_rows = [
@@ -809,6 +1021,152 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(by_policy["hopeless_front_insert"]["center_agg_rate_bps"], 970.0)
         self.assertEqual(by_policy["hopeless_front_insert"]["target_edge_queue_wait_ms"], 80.0)
 
+    def test_build_typical_case_detail_rows_preserves_load_ratio_distinction(self) -> None:
+        scene_rows = [
+            {
+                "case_label": "L01",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 0.8,
+                "background_period_ms": 10,
+                "rho_bg": 0.388,
+                "rho_pdb": 0.183,
+                "prb_share_pdb": 0.321,
+                "g_pdb_mbps": 0.4,
+                "baseline_edge_pdb_satisfaction_rate": 0.98,
+                "proposed_edge_pdb_satisfaction_rate": 0.99,
+                "mean_delta_pdb_satisfaction_rate": 0.01,
+                "mean_center_throughput_retention": 0.99,
+            },
+            {
+                "case_label": "L02",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 1.2,
+                "background_period_ms": 10,
+                "rho_bg": 0.582,
+                "rho_pdb": 0.183,
+                "prb_share_pdb": 0.239,
+                "g_pdb_mbps": 0.4,
+                "baseline_edge_pdb_satisfaction_rate": 0.70,
+                "proposed_edge_pdb_satisfaction_rate": 0.90,
+                "mean_delta_pdb_satisfaction_rate": 0.20,
+                "mean_center_throughput_retention": 0.93,
+            },
+        ]
+        per_run_rows = [
+            {
+                "case_label": "L01",
+                "policy": "tail_append",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 0.8,
+                "background_period_ms": 10,
+                "edge_pdb_satisfaction_rate": 0.98,
+                "center_agg_rate_bps": 1000.0,
+                "center_avg_rate_bps": 50.0,
+                "prb_utilization": 0.50,
+                "center_prb_share": 0.70,
+                "edge_prb_share": 0.30,
+                "pdb_arrivals_in_window": 8.0,
+                "pdb_violation_rate": 0.02,
+                "target_edge_completion_delay_ms": 120.0,
+                "target_edge_queue_wait_ms": 90.0,
+                "target_edge_service_time_ms": 30.0,
+                "edge_backlog_bits": 4000.0,
+            },
+            {
+                "case_label": "L01",
+                "policy": "hopeless_front_insert",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 0.8,
+                "background_period_ms": 10,
+                "edge_pdb_satisfaction_rate": 0.99,
+                "center_agg_rate_bps": 980.0,
+                "center_avg_rate_bps": 49.0,
+                "prb_utilization": 0.52,
+                "center_prb_share": 0.68,
+                "edge_prb_share": 0.32,
+                "pdb_arrivals_in_window": 8.0,
+                "pdb_violation_rate": 0.01,
+                "target_edge_completion_delay_ms": 110.0,
+                "target_edge_queue_wait_ms": 82.0,
+                "target_edge_service_time_ms": 28.0,
+                "edge_backlog_bits": 3500.0,
+            },
+            {
+                "case_label": "L02",
+                "policy": "tail_append",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 1.2,
+                "background_period_ms": 10,
+                "edge_pdb_satisfaction_rate": 0.70,
+                "center_agg_rate_bps": 900.0,
+                "center_avg_rate_bps": 45.0,
+                "prb_utilization": 0.60,
+                "center_prb_share": 0.74,
+                "edge_prb_share": 0.26,
+                "pdb_arrivals_in_window": 8.0,
+                "pdb_violation_rate": 0.30,
+                "target_edge_completion_delay_ms": 140.0,
+                "target_edge_queue_wait_ms": 110.0,
+                "target_edge_service_time_ms": 30.0,
+                "edge_backlog_bits": 5000.0,
+            },
+            {
+                "case_label": "L02",
+                "policy": "hopeless_front_insert",
+                "background_user_count": 40,
+                "pdb_user_count": 4,
+                "pdb_ms": 100,
+                "pdb_packet_kb": 5.0,
+                "background_packet_kb": 1.2,
+                "background_period_ms": 10,
+                "edge_pdb_satisfaction_rate": 0.90,
+                "center_agg_rate_bps": 850.0,
+                "center_avg_rate_bps": 42.5,
+                "prb_utilization": 0.58,
+                "center_prb_share": 0.69,
+                "edge_prb_share": 0.31,
+                "pdb_arrivals_in_window": 8.0,
+                "pdb_violation_rate": 0.10,
+                "target_edge_completion_delay_ms": 120.0,
+                "target_edge_queue_wait_ms": 88.0,
+                "target_edge_service_time_ms": 32.0,
+                "edge_backlog_bits": 4100.0,
+            },
+        ]
+
+        rows = build_typical_case_detail_rows(
+            scene_rows,
+            per_run_rows,
+            baseline_policy="tail_append",
+            proposed_policy="hopeless_front_insert",
+        )
+
+        self.assertEqual(len(rows), 4)
+        self.assertEqual(
+            {(row["case_label"], row["policy"], row["background_packet_kb"]) for row in rows},
+            {
+                ("easy", "tail_append", 0.8),
+                ("easy", "hopeless_front_insert", 0.8),
+                ("critical", "tail_append", 1.2),
+                ("critical", "hopeless_front_insert", 1.2),
+            },
+        )
+
     def test_build_typical_case_detail_rows_raises_when_selected_case_is_missing_requested_policy(self) -> None:
         scene_rows = [
             {
@@ -874,6 +1232,49 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(rows[0]["baseline_feasible"], 0)
         self.assertEqual(rows[0]["proposed_feasible"], 1)
         self.assertEqual(rows[0]["threshold"], 0.95)
+
+    def test_boundary_feasibility_rows_preserves_load_ratio_distinction(self) -> None:
+        rows = build_boundary_feasibility_rows(
+            [
+                {
+                    "case_label": "L01",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 0.8,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.388,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.321,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.88,
+                    "proposed_edge_pdb_satisfaction_rate": 0.95,
+                },
+                {
+                    "case_label": "L02",
+                    "background_user_count": 40,
+                    "pdb_user_count": 4,
+                    "pdb_ms": 100,
+                    "pdb_packet_kb": 5.0,
+                    "background_packet_kb": 1.2,
+                    "background_period_ms": 10,
+                    "rho_bg": 0.582,
+                    "rho_pdb": 0.183,
+                    "prb_share_pdb": 0.239,
+                    "g_pdb_mbps": 0.4,
+                    "baseline_edge_pdb_satisfaction_rate": 0.86,
+                    "proposed_edge_pdb_satisfaction_rate": 0.92,
+                },
+            ],
+            threshold=0.90,
+        )
+
+        self.assertEqual(len(rows), 2)
+        self.assertEqual(
+            {(row["case_label"], row["background_packet_kb"]) for row in rows},
+            {("L01", 0.8), ("L02", 1.2)},
+        )
 
     def test_boundary_feasibility_rows_treats_equality_at_threshold_as_feasible(self) -> None:
         rows = build_boundary_feasibility_rows(

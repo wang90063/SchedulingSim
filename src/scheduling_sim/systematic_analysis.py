@@ -184,19 +184,24 @@ def load_ratio_cases(
     return cases
 
 
+def _has_non_blank_value(row: dict[str, object], field_name: str) -> bool:
+    if field_name not in row:
+        return False
+    value = row[field_name]
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
+
+
+def _has_load_ratio_key_fields(row: dict[str, object]) -> bool:
+    return _has_non_blank_value(row, "background_packet_kb") and _has_non_blank_value(row, "background_period_ms")
+
+
 def scene_key(
     row: dict[str, float | int | str],
 ) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, int]:
-    def _has_non_blank_value(field_name: str) -> bool:
-        if field_name not in row:
-            return False
-        value = row[field_name]
-        if isinstance(value, str):
-            return value.strip() != ""
-        return True
-
-    has_background_packet_kb = _has_non_blank_value("background_packet_kb")
-    has_background_period_ms = _has_non_blank_value("background_period_ms")
+    has_background_packet_kb = _has_non_blank_value(row, "background_packet_kb")
+    has_background_period_ms = _has_non_blank_value(row, "background_period_ms")
     if has_background_packet_kb and has_background_period_ms:
         return (
             int(row["background_user_count"]),
@@ -231,6 +236,57 @@ def load_ratio_scene_key(case: LoadRatioCase) -> tuple[int, int, int, float, flo
         float(case.background_packet_kb),
         int(case.background_period_ms),
     )
+
+
+def _case_metadata(case: SystematicCase | LoadRatioCase) -> dict[str, float | int | str]:
+    metadata: dict[str, float | int | str] = {
+        "background_user_count": int(case.background_user_count),
+        "pdb_user_count": int(case.pdb_user_count),
+        "pdb_ms": int(case.pdb_ms),
+        "pdb_packet_kb": float(case.pdb_packet_kb) if isinstance(case, LoadRatioCase) else int(case.pdb_packet_kb),
+    }
+    if isinstance(case, LoadRatioCase):
+        metadata.update(
+            {
+                "case_label": str(case.case_label),
+                "background_packet_kb": float(case.background_packet_kb),
+                "background_period_ms": int(case.background_period_ms),
+                "rho_bg": float(case.rho_bg),
+                "rho_pdb": float(case.rho_pdb),
+                "prb_share_pdb": float(case.prb_share_pdb),
+                "g_pdb_mbps": float(case.g_pdb_mbps),
+            }
+        )
+    return metadata
+
+
+def _row_metadata(
+    row: dict[str, float | int | str],
+    *,
+    case_label_override: str | None = None,
+) -> dict[str, float | int | str]:
+    has_load_ratio_fields = _has_load_ratio_key_fields(row)
+    metadata: dict[str, float | int | str] = {
+        "background_user_count": int(row["background_user_count"]),
+        "pdb_user_count": int(row["pdb_user_count"]),
+        "pdb_ms": int(row["pdb_ms"]),
+        "pdb_packet_kb": float(row["pdb_packet_kb"]) if has_load_ratio_fields else int(row["pdb_packet_kb"]),
+    }
+    if case_label_override is not None:
+        metadata["case_label"] = str(case_label_override)
+    elif _has_non_blank_value(row, "case_label"):
+        metadata["case_label"] = str(row["case_label"])
+    if has_load_ratio_fields:
+        metadata.update(
+            {
+                "background_packet_kb": float(row["background_packet_kb"]),
+                "background_period_ms": int(row["background_period_ms"]),
+            }
+        )
+        for field_name in ("rho_bg", "rho_pdb", "prb_share_pdb", "g_pdb_mbps"):
+            if _has_non_blank_value(row, field_name):
+                metadata[field_name] = float(row[field_name])
+    return metadata
 
 
 def merge_row_sets(
@@ -503,17 +559,14 @@ def per_run_metric_row(
     scenario_id: str,
     seed: int,
     policy: str,
-    case: SystematicCase,
+    case: SystematicCase | LoadRatioCase,
     summary: dict[str, float],
 ) -> dict[str, float | int | str]:
     return {
         "seed": int(seed),
         "scenario_id": scenario_id,
         "policy": str(policy),
-        "background_user_count": int(case.background_user_count),
-        "pdb_user_count": int(case.pdb_user_count),
-        "pdb_ms": int(case.pdb_ms),
-        "pdb_packet_kb": int(case.pdb_packet_kb),
+        **_case_metadata(case),
         "edge_pdb_satisfaction_rate": float(summary["edge_pdb_satisfaction_rate"]),
         "center_agg_rate_bps": float(summary["center_agg_rate_bps"]),
         "center_avg_rate_bps": float(summary["center_avg_rate_bps"]),
@@ -531,11 +584,11 @@ def per_run_metric_row(
 
 def paired_metric_row(
     *,
-    case: SystematicCase,
+    case: SystematicCase | LoadRatioCase,
     seed: int,
     baseline_summary: dict[str, float],
     proposed_summary: dict[str, float],
-) -> dict[str, float | int]:
+) -> dict[str, float | int | str]:
     baseline_center_rate = float(baseline_summary["center_agg_rate_bps"])
     proposed_center_rate = float(proposed_summary["center_agg_rate_bps"])
     delta_pdb_satisfaction_rate = round(
@@ -549,10 +602,7 @@ def paired_metric_row(
     )
     return {
         "seed": int(seed),
-        "background_user_count": int(case.background_user_count),
-        "pdb_user_count": int(case.pdb_user_count),
-        "pdb_ms": int(case.pdb_ms),
-        "pdb_packet_kb": int(case.pdb_packet_kb),
+        **_case_metadata(case),
         "baseline_edge_pdb_satisfaction_rate": float(baseline_summary["edge_pdb_satisfaction_rate"]),
         "proposed_edge_pdb_satisfaction_rate": float(proposed_summary["edge_pdb_satisfaction_rate"]),
         "delta_pdb_satisfaction_rate": delta_pdb_satisfaction_rate,
@@ -597,17 +647,17 @@ _TYPICAL_CASE_DETAIL_METRICS = (
 )
 
 
-def aggregate_scene_rows(paired_rows: list[dict[str, float | int]]) -> list[dict[str, float | int]]:
-    grouped: dict[tuple[int, int, int, int], list[dict[str, float | int]]] = {}
+def aggregate_scene_rows(
+    paired_rows: list[dict[str, float | int | str]],
+) -> list[dict[str, float | int | str]]:
+    grouped: dict[
+        tuple[int, int, int, int] | tuple[int, int, int, float, float, int],
+        list[dict[str, float | int | str]],
+    ] = {}
     for row in paired_rows:
-        key = (
-            int(row["background_user_count"]),
-            int(row["pdb_user_count"]),
-            int(row["pdb_ms"]),
-            int(row["pdb_packet_kb"]),
-        )
+        key = scene_key(row)
         grouped.setdefault(key, []).append(row)
-    aggregated: list[dict[str, float | int]] = []
+    aggregated: list[dict[str, float | int | str]] = []
     for key, group in sorted(grouped.items()):
         delta_values = [float(row["delta_pdb_satisfaction_rate"]) for row in group]
         retention_values = [float(row["center_throughput_retention"]) for row in group]
@@ -616,26 +666,22 @@ def aggregate_scene_rows(paired_rows: list[dict[str, float | int]]) -> list[dict
         delta_edge_share_values = [float(row["delta_edge_prb_share"]) for row in group]
         baseline_values = [float(row["baseline_edge_pdb_satisfaction_rate"]) for row in group]
         proposed_values = [float(row["proposed_edge_pdb_satisfaction_rate"]) for row in group]
-        aggregated.append(
-            {
-                "background_user_count": key[0],
-                "pdb_user_count": key[1],
-                "pdb_ms": key[2],
-                "pdb_packet_kb": key[3],
-                "repeat_count": len(group),
-                "baseline_edge_pdb_satisfaction_rate": _mean(baseline_values),
-                "proposed_edge_pdb_satisfaction_rate": _mean(proposed_values),
-                "mean_delta_pdb_satisfaction_rate": _mean(delta_values),
-                "std_delta_pdb_satisfaction_rate": _stdev(delta_values),
-                "ci95_delta_pdb_satisfaction_rate": _ci95(delta_values),
-                "mean_center_throughput_retention": _mean(retention_values),
-                "std_center_throughput_retention": _stdev(retention_values),
-                "ci95_center_throughput_retention": _ci95(retention_values),
-                "mean_delta_prb_utilization": _mean(delta_prb_values),
-                "mean_delta_center_prb_share": _mean(delta_center_share_values),
-                "mean_delta_edge_prb_share": _mean(delta_edge_share_values),
-            }
-        )
+        aggregated_row = {
+            **_row_metadata(group[0]),
+            "repeat_count": len(group),
+            "baseline_edge_pdb_satisfaction_rate": _mean(baseline_values),
+            "proposed_edge_pdb_satisfaction_rate": _mean(proposed_values),
+            "mean_delta_pdb_satisfaction_rate": _mean(delta_values),
+            "std_delta_pdb_satisfaction_rate": _stdev(delta_values),
+            "ci95_delta_pdb_satisfaction_rate": _ci95(delta_values),
+            "mean_center_throughput_retention": _mean(retention_values),
+            "std_center_throughput_retention": _stdev(retention_values),
+            "ci95_center_throughput_retention": _ci95(retention_values),
+            "mean_delta_prb_utilization": _mean(delta_prb_values),
+            "mean_delta_center_prb_share": _mean(delta_center_share_values),
+            "mean_delta_edge_prb_share": _mean(delta_edge_share_values),
+        }
+        aggregated.append(aggregated_row)
     return aggregated
 
 
@@ -709,30 +755,20 @@ def select_typical_case_rows(scene_rows: list[dict[str, float | int]]) -> list[d
         selections.append(("high_cost", min(positive_gain_rows, key=lambda row: float(row["mean_center_throughput_retention"]))))
 
     deduped: list[dict[str, float | int | str]] = []
-    seen_keys: set[tuple[int, int, int, int]] = set()
+    seen_keys: set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]] = set()
     for label, row in selections:
-        key = (
-            int(row["background_user_count"]),
-            int(row["pdb_user_count"]),
-            int(row["pdb_ms"]),
-            int(row["pdb_packet_kb"]),
-        )
+        key = scene_key(row)
         if key in seen_keys:
             continue
         seen_keys.add(key)
-        deduped.append(
-            {
-                "case_label": label,
-                "background_user_count": int(row["background_user_count"]),
-                "pdb_user_count": int(row["pdb_user_count"]),
-                "pdb_ms": int(row["pdb_ms"]),
-                "pdb_packet_kb": int(row["pdb_packet_kb"]),
-                "baseline_edge_pdb_satisfaction_rate": float(row["baseline_edge_pdb_satisfaction_rate"]),
-                "proposed_edge_pdb_satisfaction_rate": float(row["proposed_edge_pdb_satisfaction_rate"]),
-                "mean_delta_pdb_satisfaction_rate": float(row["mean_delta_pdb_satisfaction_rate"]),
-                "mean_center_throughput_retention": float(row["mean_center_throughput_retention"]),
-            }
-        )
+        selected_row = {
+            **_row_metadata(row, case_label_override=label),
+            "baseline_edge_pdb_satisfaction_rate": float(row["baseline_edge_pdb_satisfaction_rate"]),
+            "proposed_edge_pdb_satisfaction_rate": float(row["proposed_edge_pdb_satisfaction_rate"]),
+            "mean_delta_pdb_satisfaction_rate": float(row["mean_delta_pdb_satisfaction_rate"]),
+            "mean_center_throughput_retention": float(row["mean_center_throughput_retention"]),
+        }
+        deduped.append(selected_row)
     return deduped
 
 
@@ -743,15 +779,14 @@ def build_typical_case_detail_rows(
     proposed_policy: str,
 ) -> list[dict[str, float | int | str]]:
     rows: list[dict[str, float | int | str]] = []
-    grouped: dict[tuple[str, int, int, int, int], list[dict[str, float | int | str]]] = {}
+    grouped: dict[
+        tuple[str, int, int, int, int]
+        | tuple[str, int, int, int, float, float, int],
+        list[dict[str, float | int | str]],
+    ] = {}
     for row in per_run_rows:
-        key = (
-            str(row["policy"]),
-            int(row["background_user_count"]),
-            int(row["pdb_user_count"]),
-            int(row["pdb_ms"]),
-            int(row["pdb_packet_kb"]),
-        )
+        scene_identity = scene_key(row)
+        key = (str(row["policy"]), *scene_identity)
         grouped.setdefault(key, []).append(row)
 
     for case_row in select_typical_case_rows(scene_rows):
@@ -759,9 +794,10 @@ def build_typical_case_detail_rows(
         pdb_user_count = int(case_row["pdb_user_count"])
         pdb_ms = int(case_row["pdb_ms"])
         pdb_packet_kb = int(case_row["pdb_packet_kb"])
+        scene_identity = scene_key(case_row)
         case_groups: dict[str, list[dict[str, float | int | str]]] = {}
         for policy in (baseline_policy, proposed_policy):
-            group = grouped.get((policy, background_user_count, pdb_user_count, pdb_ms, pdb_packet_kb), [])
+            group = grouped.get((policy, *scene_identity), [])
             if not group:
                 raise ValueError(
                     "missing policy "
@@ -773,13 +809,10 @@ def build_typical_case_detail_rows(
                 )
             case_groups[policy] = group
         for policy in (baseline_policy, proposed_policy):
-            detail_row: dict[str, float | int | str] = {
+            detail_row = {
+                **_row_metadata(case_row),
                 "case_label": str(case_row["case_label"]),
                 "policy": str(policy),
-                "background_user_count": background_user_count,
-                "pdb_user_count": pdb_user_count,
-                "pdb_ms": pdb_ms,
-                "pdb_packet_kb": pdb_packet_kb,
             }
             for metric in _TYPICAL_CASE_DETAIL_METRICS:
                 detail_row[metric] = _mean([float(row[metric]) for row in case_groups[policy]])
@@ -790,20 +823,16 @@ def build_typical_case_detail_rows(
 def build_boundary_feasibility_rows(
     scene_rows: list[dict[str, float | int]],
     threshold: float,
-) -> list[dict[str, float | int]]:
-    rows: list[dict[str, float | int]] = []
+) -> list[dict[str, float | int | str]]:
+    rows: list[dict[str, float | int | str]] = []
     for row in scene_rows:
-        rows.append(
-            {
-                "background_user_count": int(row["background_user_count"]),
-                "pdb_user_count": int(row["pdb_user_count"]),
-                "pdb_ms": int(row["pdb_ms"]),
-                "pdb_packet_kb": int(row["pdb_packet_kb"]),
-                "threshold": float(threshold),
-                "baseline_feasible": int(float(row["baseline_edge_pdb_satisfaction_rate"]) >= threshold),
-                "proposed_feasible": int(float(row["proposed_edge_pdb_satisfaction_rate"]) >= threshold),
-            }
-        )
+        boundary_row = {
+            **_row_metadata(row),
+            "threshold": float(threshold),
+            "baseline_feasible": int(float(row["baseline_edge_pdb_satisfaction_rate"]) >= threshold),
+            "proposed_feasible": int(float(row["proposed_edge_pdb_satisfaction_rate"]) >= threshold),
+        }
+        rows.append(boundary_row)
     return rows
 
 

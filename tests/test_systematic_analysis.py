@@ -644,6 +644,51 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(row["prb_share_pdb"], 0.321)
         self.assertEqual(row["g_pdb_mbps"], 0.4)
 
+    def test_per_run_metric_row_includes_target_and_actual_ratio_metadata(self) -> None:
+        row = per_run_metric_row(
+            scenario_id="rho-first-case",
+            seed=7,
+            policy="tail_append",
+            case=LoadRatioCase(
+                case_label="L01",
+                target_rho_bg=0.388,
+                target_rho_pdb=0.183,
+                actual_rho_bg=0.390,
+                actual_rho_pdb=0.182,
+                prb_share_pdb=0.318,
+                background_mapping_policy="candidate_domain_solve_period",
+                pdb_mapping_policy="candidate_domain_solve_packet",
+                background_user_count=40,
+                background_packet_kb=2.0,
+                background_period_ms=25.0,
+                pdb_user_count=4,
+                pdb_packet_kb=5.0,
+                pdb_ms=100,
+                g_pdb_mbps=0.4,
+            ),
+            summary={
+                "edge_pdb_satisfaction_rate": 0.5,
+                "center_agg_rate_bps": 1.0,
+                "center_avg_rate_bps": 1.0,
+                "prb_utilization": 0.5,
+                "center_prb_share": 0.4,
+                "edge_prb_share": 0.6,
+                "pdb_arrivals_in_window": 4.0,
+                "pdb_violation_rate": 0.5,
+                "target_edge_completion_delay_ms": 80.0,
+                "target_edge_queue_wait_ms": 60.0,
+                "target_edge_service_time_ms": 20.0,
+                "edge_backlog_bits": 0.0,
+            },
+        )
+
+        self.assertEqual(row["target_rho_bg"], 0.388)
+        self.assertEqual(row["target_rho_pdb"], 0.183)
+        self.assertEqual(row["actual_rho_bg"], 0.39)
+        self.assertEqual(row["actual_rho_pdb"], 0.182)
+        self.assertEqual(row["background_mapping_policy"], "candidate_domain_solve_period")
+        self.assertEqual(row["pdb_mapping_policy"], "candidate_domain_solve_packet")
+
     def test_paired_metric_row_computes_gain_and_retention(self) -> None:
         row = paired_metric_row(
             case=self._simple_case(),

@@ -585,11 +585,17 @@ def _case_metadata(case: SystematicCase | LoadRatioCase) -> dict[str, float | in
             {
                 "case_label": str(case.case_label),
                 "background_packet_kb": float(case.background_packet_kb),
-                "background_period_ms": int(case.background_period_ms),
+                "background_period_ms": float(case.background_period_ms),
                 "rho_bg": float(case.rho_bg),
                 "rho_pdb": float(case.rho_pdb),
+                "target_rho_bg": float(case.target_rho_bg),
+                "target_rho_pdb": float(case.target_rho_pdb),
+                "actual_rho_bg": float(case.actual_rho_bg),
+                "actual_rho_pdb": float(case.actual_rho_pdb),
                 "prb_share_pdb": float(case.prb_share_pdb),
                 "g_pdb_mbps": float(case.g_pdb_mbps),
+                "background_mapping_policy": str(case.background_mapping_policy),
+                "pdb_mapping_policy": str(case.pdb_mapping_policy),
             }
         )
     return metadata
@@ -615,12 +621,23 @@ def _row_metadata(
         metadata.update(
             {
                 "background_packet_kb": float(row["background_packet_kb"]),
-                "background_period_ms": int(row["background_period_ms"]),
+                "background_period_ms": float(row["background_period_ms"]),
             }
         )
         for field_name in ("rho_bg", "rho_pdb", "prb_share_pdb", "g_pdb_mbps"):
             if _has_non_blank_value(row, field_name):
                 metadata[field_name] = float(row[field_name])
+        for field_name in (
+            "target_rho_bg",
+            "target_rho_pdb",
+            "actual_rho_bg",
+            "actual_rho_pdb",
+        ):
+            if _has_non_blank_value(row, field_name):
+                metadata[field_name] = float(row[field_name])
+        for field_name in ("background_mapping_policy", "pdb_mapping_policy"):
+            if _has_non_blank_value(row, field_name):
+                metadata[field_name] = str(row[field_name])
     return metadata
 
 

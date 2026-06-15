@@ -8,6 +8,9 @@ from scheduling_sim.config import load_config
 from scheduling_sim.metrics import MetricsCollector
 from scheduling_sim.simulator import UlSimulator
 from scheduling_sim.systematic_analysis import (
+    BackgroundMappingPolicy,
+    LoadRatioMappingPolicy,
+    PdbMappingPolicy,
     SceneBankSpec,
     aggregate_scene_rows,
     build_boundary_feasibility_rows,
@@ -15,6 +18,7 @@ from scheduling_sim.systematic_analysis import (
     build_systematic_case_users,
     build_typical_case_detail_rows,
     capacity_summary_rows,
+    load_ratio_cases,
     merge_row_sets,
     paired_metric_row,
     per_run_metric_row,
@@ -81,6 +85,17 @@ def _format_scene_tuple(row: dict[str, object]) -> str:
     )
 
 
+def _format_load_ratio_scene_tuple(row: dict[str, object]) -> str:
+    return (
+        f"case=`{str(row.get('case_label', ''))}` "
+        f"rho_bg=`{float(row['rho_bg']):.3f}` "
+        f"rho_pdb=`{float(row['rho_pdb']):.3f}` "
+        f"prb_share_pdb=`{float(row['prb_share_pdb']):.3f}` "
+        f"pdb_ms=`{int(row['pdb_ms'])}` "
+        f"pdb_packet_kb=`{float(row['pdb_packet_kb']):g}`"
+    )
+
+
 def _boundary_summary(boundary_rows: list[dict[str, object]]) -> dict[str, object]:
     expanded_rows = [
         row for row in boundary_rows if int(row["baseline_feasible"]) == 0 and int(row["proposed_feasible"]) == 1
@@ -114,18 +129,539 @@ def _reuse_raw_summaries(reuse_output_dirs: list[str]) -> list[dict[str, object]
     return raw_summaries
 
 
-def _reuse_rows(reuse_output_dirs: list[str]) -> tuple[list[dict[str, object]], list[dict[str, object]], set[tuple[int, int, int, int]]]:
+def _has_non_blank_value(row: dict[str, object], field_name: str) -> bool:
+    if field_name not in row:
+        return False
+    value = row[field_name]
+    if isinstance(value, str):
+        return value.strip() != ""
+    return True
+
+
+def _case_legacy_key(case: object) -> tuple[int, int, int, int]:
+    return (
+        int(getattr(case, "background_user_count")),
+        int(getattr(case, "pdb_user_count")),
+        int(getattr(case, "pdb_ms")),
+        int(round(float(getattr(case, "pdb_packet_kb")))),
+    )
+
+
+def _enrich_reused_load_ratio_rows(
+    rows: list[dict[str, object]],
+    *,
+    load_ratio_cases_to_match: list[object],
+) -> list[dict[str, object]]:
+    legacy_key_to_cases: dict[tuple[int, int, int, int], list[object]] = {}
+    for case in load_ratio_cases_to_match:
+        legacy_key_to_cases.setdefault(_case_legacy_key(case), []).append(case)
+
+    enriched_rows: list[dict[str, object]] = []
+    for row in rows:
+        if _has_non_blank_value(row, "background_packet_kb") and _has_non_blank_value(row, "background_period_ms"):
+            enriched_rows.append(row)
+            continue
+        legacy_key = (
+            int(row["background_user_count"]),
+            int(row["pdb_user_count"]),
+            int(row["pdb_ms"]),
+            int(round(float(row["pdb_packet_kb"]))),
+        )
+        matching_cases = legacy_key_to_cases.get(legacy_key, [])
+        if len(matching_cases) == 1:
+            case = matching_cases[0]
+            enriched_rows.append(
+                {
+                    **row,
+                    "case_label": str(getattr(case, "case_label")),
+                    "background_packet_kb": float(getattr(case, "background_packet_kb")),
+                    "background_period_ms": float(getattr(case, "background_period_ms")),
+                    "rho_bg": float(getattr(case, "rho_bg")),
+                    "rho_pdb": float(getattr(case, "rho_pdb")),
+                    "target_rho_bg": float(getattr(case, "target_rho_bg")),
+                    "target_rho_pdb": float(getattr(case, "target_rho_pdb")),
+                    "actual_rho_bg": float(getattr(case, "actual_rho_bg")),
+                    "actual_rho_pdb": float(getattr(case, "actual_rho_pdb")),
+                    "prb_share_pdb": float(getattr(case, "prb_share_pdb")),
+                    "g_pdb_mbps": float(getattr(case, "g_pdb_mbps")),
+                    "background_mapping_policy": str(getattr(case, "background_mapping_policy")),
+                    "pdb_mapping_policy": str(getattr(case, "pdb_mapping_policy")),
+                }
+            )
+            continue
+        enriched_rows.append(row)
+    return enriched_rows
+
+
+def _reuse_rows(
+    reuse_output_dirs: list[str],
+    *,
+    load_ratio_cases_to_match: list[object] | None = None,
+) -> tuple[
+    list[dict[str, object]],
+    list[dict[str, object]],
+    set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]],
+]:
     per_run_rows: list[dict[str, object]] = []
     paired_rows: list[dict[str, object]] = []
-    scene_keys: set[tuple[int, int, int, int]] = set()
+    scene_keys: set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]] = set()
     for directory in reuse_output_dirs:
         reuse_dir = Path(directory)
         reuse_per_run_rows = _read_table(reuse_dir / "per_run_rows.csv")
         reuse_paired_rows = _read_table(reuse_dir / "paired_rows.csv")
+        if load_ratio_cases_to_match is not None:
+            reuse_per_run_rows = _enrich_reused_load_ratio_rows(
+                reuse_per_run_rows,
+                load_ratio_cases_to_match=load_ratio_cases_to_match,
+            )
+            reuse_paired_rows = _enrich_reused_load_ratio_rows(
+                reuse_paired_rows,
+                load_ratio_cases_to_match=load_ratio_cases_to_match,
+            )
         per_run_rows.extend(reuse_per_run_rows)
         paired_rows.extend(reuse_paired_rows)
         scene_keys |= scene_key_set(reuse_paired_rows)
     return per_run_rows, paired_rows, scene_keys
+
+
+def _load_ratio_summary_report(
+    *,
+    manifest: dict[str, object],
+    scene_rows: list[dict[str, object]],
+    region_rows: list[dict[str, object]],
+    typical_case_rows: list[dict[str, object]],
+    typical_case_detail_rows: list[dict[str, object]],
+    boundary_rows_95: list[dict[str, object]],
+    boundary_rows_90: list[dict[str, object]],
+) -> str:
+    is_rho_first = "rho_bg_values" in manifest and "rho_pdb_values" in manifest
+    if is_rho_first:
+        improved_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0]
+        worsened_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) < 0.0]
+        neutral_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) == 0.0]
+        total_paired_realizations = sum(int(row["repeat_count"]) for row in scene_rows)
+        best_gain_row = max(scene_rows, key=lambda row: float(row["mean_delta_pdb_satisfaction_rate"]), default=None)
+        worst_cost_row = min(scene_rows, key=lambda row: float(row["mean_center_throughput_retention"]), default=None)
+        boundary_95_summary = _boundary_summary(boundary_rows_95)
+        boundary_90_summary = _boundary_summary(boundary_rows_90)
+        detail_by_case_and_policy = {
+            (str(row["case_label"]), str(row["policy"])): row for row in typical_case_detail_rows
+        }
+        lines = [
+            "# Systematic Simulation Analysis",
+            "",
+            "## Wireless Environment and Realization Bank",
+            "",
+            f"- reference_config: `{manifest['reference_config']}`",
+            f"- scene_bank_counts: `{manifest['scene_bank_counts']}`",
+            f"- realization_bank_total_users: `{sum(int(value) for value in dict(manifest['scene_bank_counts']).values())}`",
+            f"- repeat_count_per_scene_point: `{manifest['repeat_count']}`",
+            "",
+            "## Load-Ratio Scan Matrix",
+            "",
+            f"- `scan_mode = {manifest['scan_mode']}`",
+            f"- `rho_bg_values = {manifest['rho_bg_values']}`",
+            f"- `rho_pdb_values = {manifest['rho_pdb_values']}`",
+            f"- `pdb_ms_values = {manifest['pdb_ms_values']}`",
+            f"- `mapping_policy = {manifest['mapping_policy']}`",
+            f"- `repeat_count = {manifest['repeat_count']}`",
+            f"- Scene points evaluated: `{len(scene_rows)}`",
+            f"- Paired realization rows: `{total_paired_realizations}`",
+            f"- Policy runs executed: `{total_paired_realizations * 2}`",
+            "",
+            "## Reporting Semantics",
+            "",
+            "- `scene_summary.csv` aggregates policy-paired results at each rho-first scene point.",
+            "- Target `rho` values define the scan; actual `rho` values are recomputed after mapping and rounding.",
+            "- `PDB` timing shape remains a secondary axis, so equal target `rho_pdb` values can still be compared across different `pdb_ms` realizations.",
+            "- `background_mapping_policy` and `pdb_mapping_policy` record the candidate-domain solver used for each scene.",
+            "- capacity summaries are omitted for load-ratio outputs because the legacy feasible-range tables assume user-count axes rather than ratio coordinates.",
+            f"- boundary_feasibility_files: `{manifest['boundary_feasibility_files']}`",
+            f"- representative_case_files: `{manifest['representative_case_files']}`",
+            f"- Aggregated scene points: `{len(scene_rows)}`",
+            "",
+            "## Panoramic PDB Gain Overview",
+            "",
+            f"- Scene points evaluated: `{len(scene_rows)}`",
+            f"- Proposed improves `{len(improved_rows)}` points, ties `{len(neutral_rows)}` points, and regresses `{len(worsened_rows)}` points.",
+            f"- Mean scene-level delta PDB satisfaction: `{_mean_metric(scene_rows, 'mean_delta_pdb_satisfaction_rate'):.3f}`",
+            f"- Mean scene-level center throughput retention: `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`",
+            "",
+            "| case_label | target_rho_bg | target_rho_pdb | actual_rho_bg | actual_rho_pdb | prb_share_pdb | background_mapping_policy | pdb_mapping_policy | background_user_count | background_packet_kb | background_period_ms | pdb_user_count | pdb_ms | pdb_packet_kb | baseline_pdb_satisfaction | proposed_pdb_satisfaction | delta_pdb_satisfaction | center_retention |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+        for row in sorted(scene_rows, key=lambda item: str(item.get("case_label", ""))):
+            lines.append(
+                f"| {str(row.get('case_label', ''))} | {float(row['target_rho_bg']):.3f} | {float(row['target_rho_pdb']):.3f} | "
+                f"{float(row['actual_rho_bg']):.3f} | {float(row['actual_rho_pdb']):.3f} | {float(row['prb_share_pdb']):.3f} | "
+                f"{str(row.get('background_mapping_policy', ''))} | {str(row.get('pdb_mapping_policy', ''))} | "
+                f"{int(row['background_user_count'])} | {float(row['background_packet_kb']):g} | {float(row['background_period_ms']):g} | "
+                f"{int(row['pdb_user_count'])} | {int(row['pdb_ms'])} | {float(row['pdb_packet_kb']):g} | "
+                f"{float(row['baseline_edge_pdb_satisfaction_rate']):.3f} | {float(row['proposed_edge_pdb_satisfaction_rate']):.3f} | "
+                f"{float(row['mean_delta_pdb_satisfaction_rate']):.3f} | {float(row['mean_center_throughput_retention']):.3f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Insight Summary",
+                "",
+                f"- Positive-gain scene points: `{len(improved_rows)}`",
+                f"- Zero-gain scene points: `{len(neutral_rows)}`",
+                f"- Negative-gain scene points: `{len(worsened_rows)}`",
+            ]
+        )
+        if best_gain_row is not None:
+            lines.append(f"- Best gain scene: `{_format_load_ratio_scene_tuple(best_gain_row)}`")
+        if worst_cost_row is not None:
+            lines.append(f"- Lowest center-retention scene: `{_format_load_ratio_scene_tuple(worst_cost_row)}`")
+        lines.extend(
+            [
+                "",
+                "## Background Cost and Resource Analysis",
+                "",
+                f"- Mean center throughput retention across scene points: `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`",
+                f"- Mean PRB utilization delta (proposed - baseline): `{_mean_metric(scene_rows, 'mean_delta_prb_utilization'):.3f}`",
+                f"- Mean center PRB share delta: `{_mean_metric(scene_rows, 'mean_delta_center_prb_share'):.3f}`",
+                f"- Mean edge PRB share delta: `{_mean_metric(scene_rows, 'mean_delta_edge_prb_share'):.3f}`",
+                "",
+                "| Region | Scene Points | Share | Win Rate | Mean Delta PDB Satisfaction | Mean Center Retention | Mean Delta PRB Utilization |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in region_rows:
+            lines.append(
+                f"| {row['region']} | {row['scene_point_count']} | {float(row['scene_point_share']):.2f} | "
+                f"{float(row['proposed_win_rate']):.2f} | {float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
+                f"{float(row['mean_center_throughput_retention']):.3f} | {float(row['mean_delta_prb_utilization']):.3f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "## Feasible Boundary Snapshot",
+                "",
+                "- Boundary feasibility snapshots remain available at the 95% and 90% thresholds.",
+                "",
+                "| Threshold | Baseline Feasible Points | Proposed Feasible Points | Expanded Points | Regressed Points |",
+                "| ---: | ---: | ---: | ---: | ---: |",
+                f"| 0.95 | {boundary_95_summary['baseline_feasible_points']} | {boundary_95_summary['proposed_feasible_points']} | "
+                f"{boundary_95_summary['expanded_points']} | {boundary_95_summary['regressed_points']} |",
+                f"| 0.90 | {boundary_90_summary['baseline_feasible_points']} | {boundary_90_summary['proposed_feasible_points']} | "
+                f"{boundary_90_summary['expanded_points']} | {boundary_90_summary['regressed_points']} |",
+            ]
+        )
+        lines.extend(
+            [
+                "",
+                "## Representative Case Mechanism Analysis",
+                "",
+                f"- Representative cases selected: `{len(typical_case_rows)}`",
+                f"- Representative detail rows: `{len(typical_case_detail_rows)}`",
+                "- `typical_case_details.csv` is the renderer-facing mechanism table for these cases.",
+            ]
+        )
+        if typical_case_rows:
+            lines.extend(
+                [
+                    "",
+                    "| Label | target_rho_bg | target_rho_pdb | actual_rho_bg | actual_rho_pdb | prb_share_pdb | pdb_ms | pdb_packet_kb | Mean Delta PDB Satisfaction | Center Retention |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
+            for row in typical_case_rows:
+                lines.append(
+                    f"| {row['case_label']} | {float(row['target_rho_bg']):.3f} | {float(row['target_rho_pdb']):.3f} | "
+                    f"{float(row['actual_rho_bg']):.3f} | {float(row['actual_rho_pdb']):.3f} | {float(row['prb_share_pdb']):.3f} | "
+                    f"{row['pdb_ms']} | {float(row['pdb_packet_kb']):g} | {float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
+                    f"{float(row['mean_center_throughput_retention']):.3f} |"
+                )
+            lines.extend(
+                [
+                    "",
+                    "| Label | baseline_satisfaction | proposed_satisfaction | baseline_queue_ms | proposed_queue_ms | baseline_completion_ms | proposed_completion_ms | baseline_center_rate_bps | proposed_center_rate_bps | center_retention |",
+                    "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+                ]
+            )
+            for case_row in typical_case_rows:
+                baseline_row = detail_by_case_and_policy.get(
+                    (str(case_row["case_label"]), str(manifest["baseline_policy"]))
+                )
+                proposed_row = detail_by_case_and_policy.get(
+                    (str(case_row["case_label"]), str(manifest["ours_policy"]))
+                )
+                if baseline_row is None or proposed_row is None:
+                    continue
+                baseline_center_rate = float(baseline_row["center_agg_rate_bps"])
+                proposed_center_rate = float(proposed_row["center_agg_rate_bps"])
+                center_retention = 1.0 if baseline_center_rate == 0.0 else proposed_center_rate / baseline_center_rate
+                lines.append(
+                    f"| {case_row['case_label']} | {float(baseline_row['edge_pdb_satisfaction_rate']):.3f} | "
+                    f"{float(proposed_row['edge_pdb_satisfaction_rate']):.3f} | "
+                    f"{float(baseline_row['target_edge_queue_wait_ms']):.1f} | "
+                    f"{float(proposed_row['target_edge_queue_wait_ms']):.1f} | "
+                    f"{float(baseline_row['target_edge_completion_delay_ms']):.1f} | "
+                    f"{float(proposed_row['target_edge_completion_delay_ms']):.1f} | "
+                    f"{baseline_center_rate:.1f} | {proposed_center_rate:.1f} | {center_retention:.3f} |"
+                )
+        lines.extend(
+            [
+                "",
+                "## Summary",
+                "",
+                f"- Proposed improves `{len(improved_rows)}/{len(scene_rows)}` load-ratio scene points; best gain is "
+                f"`{0.0 if best_gain_row is None else float(best_gain_row['mean_delta_pdb_satisfaction_rate']):.3f}`.",
+                f"- Mean center throughput retention is `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`; "
+                f"worst retained point is `{1.0 if worst_cost_row is None else float(worst_cost_row['mean_center_throughput_retention']):.3f}`.",
+                f"- Boundary expansion adds `{boundary_95_summary['expanded_points']}` points at 95% and "
+                f"`{boundary_90_summary['expanded_points']}` points at 90%.",
+            ]
+        )
+        return "\n".join(lines)
+
+    improved_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0]
+    worsened_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) < 0.0]
+    neutral_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) == 0.0]
+    total_paired_realizations = sum(int(row["repeat_count"]) for row in scene_rows)
+    best_gain_row = max(scene_rows, key=lambda row: float(row["mean_delta_pdb_satisfaction_rate"]), default=None)
+    worst_cost_row = min(scene_rows, key=lambda row: float(row["mean_center_throughput_retention"]), default=None)
+    boundary_95_summary = _boundary_summary(boundary_rows_95)
+    boundary_90_summary = _boundary_summary(boundary_rows_90)
+    detail_by_case_and_policy = {
+        (str(row["case_label"]), str(row["policy"])): row for row in typical_case_detail_rows
+    }
+    lines = [
+        "# Systematic Simulation Analysis",
+        "",
+        "## Wireless Environment and Realization Bank",
+        "",
+        f"- reference_config: `{manifest['reference_config']}`",
+        f"- scene_bank_counts: `{manifest['scene_bank_counts']}`",
+        f"- realization_bank_total_users: `{sum(int(value) for value in dict(manifest['scene_bank_counts']).values())}`",
+        f"- repeat_count_per_scene_point: `{manifest['repeat_count']}`",
+        "",
+        "## Load-Ratio Scan Matrix",
+        "",
+        f"- `scan_mode = {manifest['scan_mode']}`",
+        f"- `repeat_count = {manifest['repeat_count']}`",
+        f"- Scene points evaluated: `{len(scene_rows)}`",
+        f"- Paired realization rows: `{total_paired_realizations}`",
+        f"- Policy runs executed: `{total_paired_realizations * 2}`",
+        "",
+        "## Reporting Semantics",
+        "",
+        "- `scene_summary.csv` aggregates policy-paired results at each load-ratio scene point.",
+        "- capacity summaries are omitted for load-ratio outputs because the legacy feasible-range tables assume user-count axes rather than ratio coordinates.",
+        f"- boundary_feasibility_files: `{manifest['boundary_feasibility_files']}`",
+        f"- representative_case_files: `{manifest['representative_case_files']}`",
+        f"- Aggregated scene points: `{len(scene_rows)}`",
+        "",
+        "## Panoramic PDB Gain Overview",
+        "",
+        f"- Scene points evaluated: `{len(scene_rows)}`",
+        f"- Proposed improves `{len(improved_rows)}` points, ties `{len(neutral_rows)}` points, and regresses `{len(worsened_rows)}` points.",
+        f"- Mean scene-level delta PDB satisfaction: `{_mean_metric(scene_rows, 'mean_delta_pdb_satisfaction_rate'):.3f}`",
+        f"- Mean scene-level center throughput retention: `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`",
+        "",
+        "| case_label | rho_bg | rho_pdb | prb_share_pdb | g_pdb_mbps | pdb_ms | pdb_packet_kb | baseline_pdb_satisfaction | proposed_pdb_satisfaction | delta_pdb_satisfaction | center_retention |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+    ]
+    if is_rho_first:
+        lines[11:11] = [
+            f"- `rho_bg_values = {manifest['rho_bg_values']}`",
+            f"- `rho_pdb_values = {manifest['rho_pdb_values']}`",
+            f"- `pdb_ms_values = {manifest['pdb_ms_values']}`",
+            f"- `mapping_policy = {manifest['mapping_policy']}`",
+        ]
+        lines[20:20] = [
+            "- Target `rho` values define the scan; business parameters are derived by the mapping policy and reported separately in the CSV outputs.",
+            "- `PDB` timing shape remains a secondary axis, so equal target `rho_pdb` values can still be compared across different `pdb_ms` realizations.",
+        ]
+    else:
+        lines[11:11] = [
+            f"- `background_user_count = {manifest['background_user_count']}`",
+            f"- `background_period_ms = {manifest['background_period_ms']}`",
+            f"- `pdb_user_count = {manifest['pdb_user_count']}`",
+            f"- `background_packet_kb_values = {manifest['background_packet_kb_values']}`",
+            f"- `pdb_shapes = {manifest['pdb_shapes']}`",
+        ]
+        lines[20:20] = [
+            "- `PDB` packet shape remains a secondary axis, so equal `rho_pdb` values can still be compared across different `pdb_ms` and packet-size combinations.",
+        ]
+    for row in sorted(scene_rows, key=lambda item: str(item.get("case_label", ""))):
+        lines.append(
+            f"| {str(row.get('case_label', ''))} | {float(row['rho_bg']):.3f} | {float(row['rho_pdb']):.3f} | "
+            f"{float(row['prb_share_pdb']):.3f} | {float(row['g_pdb_mbps']):.3f} | {int(row['pdb_ms'])} | "
+            f"{float(row['pdb_packet_kb']):g} | {float(row['baseline_edge_pdb_satisfaction_rate']):.3f} | "
+            f"{float(row['proposed_edge_pdb_satisfaction_rate']):.3f} | "
+            f"{float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
+            f"{float(row['mean_center_throughput_retention']):.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Insight Summary",
+            "",
+            f"- Positive-gain scene points: `{len(improved_rows)}`",
+            f"- Zero-gain scene points: `{len(neutral_rows)}`",
+            f"- Negative-gain scene points: `{len(worsened_rows)}`",
+        ]
+    )
+    if best_gain_row is not None:
+        lines.append(f"- Best gain scene: `{_format_load_ratio_scene_tuple(best_gain_row)}`")
+    if worst_cost_row is not None:
+        lines.append(f"- Lowest center-retention scene: `{_format_load_ratio_scene_tuple(worst_cost_row)}`")
+    if improved_rows:
+        lines.extend(
+            [
+                "- Positive-gain pattern:",
+                f"  - strongest point is `{_format_load_ratio_scene_tuple(max(improved_rows, key=lambda row: float(row['mean_delta_pdb_satisfaction_rate'])))}`",
+                "  - these scenes indicate the queue reorder can still rescue some deadline-limited packets without materially increasing total PRB demand.",
+            ]
+        )
+    if neutral_rows:
+        lines.extend(
+            [
+                "- Zero-gain pattern:",
+                "  - these scenes are either already easy enough that both policies satisfy all PDB packets, or overloaded enough that reordering alone cannot change completion outcomes.",
+            ]
+        )
+    if worsened_rows:
+        lines.extend(
+            [
+                "- Negative-gain pattern:",
+                f"  - weakest point is `{_format_load_ratio_scene_tuple(min(worsened_rows, key=lambda row: float(row['mean_delta_pdb_satisfaction_rate'])))}`",
+                "  - these scenes trade background throughput for edge priority without turning that priority into additional on-time completions.",
+            ]
+        )
+    lines.extend(
+        [
+            "",
+            "## Background Cost and Resource Analysis",
+            "",
+            f"- Mean center throughput retention across scene points: `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`",
+            f"- Mean PRB utilization delta (proposed - baseline): `{_mean_metric(scene_rows, 'mean_delta_prb_utilization'):.3f}`",
+            f"- Mean center PRB share delta: `{_mean_metric(scene_rows, 'mean_delta_center_prb_share'):.3f}`",
+            f"- Mean edge PRB share delta: `{_mean_metric(scene_rows, 'mean_delta_edge_prb_share'):.3f}`",
+            "",
+            "| Region | Scene Points | Share | Win Rate | Mean Delta PDB Satisfaction | Mean Center Retention | Mean Delta PRB Utilization |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in region_rows:
+        lines.append(
+            f"| {row['region']} | {row['scene_point_count']} | {float(row['scene_point_share']):.2f} | "
+            f"{float(row['proposed_win_rate']):.2f} | {float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
+            f"{float(row['mean_center_throughput_retention']):.3f} | {float(row['mean_delta_prb_utilization']):.3f} |"
+        )
+    lines.extend(
+        [
+            "",
+            "## Feasible Boundary Snapshot",
+            "",
+            "- Boundary feasibility snapshots remain available at the 95% and 90% thresholds.",
+            "",
+            "| Threshold | Baseline Feasible Points | Proposed Feasible Points | Expanded Points | Regressed Points |",
+            "| ---: | ---: | ---: | ---: | ---: |",
+            f"| 0.95 | {boundary_95_summary['baseline_feasible_points']} | {boundary_95_summary['proposed_feasible_points']} | "
+            f"{boundary_95_summary['expanded_points']} | {boundary_95_summary['regressed_points']} |",
+            f"| 0.90 | {boundary_90_summary['baseline_feasible_points']} | {boundary_90_summary['proposed_feasible_points']} | "
+            f"{boundary_90_summary['expanded_points']} | {boundary_90_summary['regressed_points']} |",
+        ]
+    )
+    if boundary_95_summary["expanded_rows"]:
+        lines.extend(
+            [
+                "",
+                "| case_label | rho_bg | rho_pdb | prb_share_pdb | pdb_ms | pdb_packet_kb |",
+                "| --- | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in boundary_95_summary["expanded_rows"][:5]:
+            lines.append(
+                f"| {str(row.get('case_label', ''))} | {float(row['rho_bg']):.3f} | {float(row['rho_pdb']):.3f} | "
+                f"{float(row['prb_share_pdb']):.3f} | {int(row['pdb_ms'])} | {float(row['pdb_packet_kb']):g} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Representative Case Mechanism Analysis",
+            "",
+            f"- Representative cases selected: `{len(typical_case_rows)}`",
+            f"- Representative detail rows: `{len(typical_case_detail_rows)}`",
+            "- `typical_case_details.csv` is the renderer-facing mechanism table for these cases.",
+        ]
+    )
+    if typical_case_rows:
+        lines.extend(
+            [
+                "",
+                "| Label | rho_bg | rho_pdb | prb_share_pdb | pdb_ms | pdb_packet_kb | Mean Delta PDB Satisfaction | Center Retention |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for row in typical_case_rows:
+            lines.append(
+                f"| {row['case_label']} | {float(row['rho_bg']):.3f} | {float(row['rho_pdb']):.3f} | "
+                f"{float(row['prb_share_pdb']):.3f} | {row['pdb_ms']} | {float(row['pdb_packet_kb']):g} | "
+                f"{float(row['mean_delta_pdb_satisfaction_rate']):.3f} | "
+                f"{float(row['mean_center_throughput_retention']):.3f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "| Label | baseline_satisfaction | proposed_satisfaction | baseline_queue_ms | proposed_queue_ms | baseline_completion_ms | proposed_completion_ms | baseline_center_rate_bps | proposed_center_rate_bps | center_retention |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for case_row in typical_case_rows:
+            baseline_row = detail_by_case_and_policy.get((str(case_row["case_label"]), str(manifest["baseline_policy"])))
+            proposed_row = detail_by_case_and_policy.get((str(case_row["case_label"]), str(manifest["ours_policy"])))
+            if baseline_row is None or proposed_row is None:
+                continue
+            baseline_center_rate = float(baseline_row["center_agg_rate_bps"])
+            proposed_center_rate = float(proposed_row["center_agg_rate_bps"])
+            center_retention = 1.0 if baseline_center_rate == 0.0 else proposed_center_rate / baseline_center_rate
+            lines.append(
+                f"| {case_row['case_label']} | {float(baseline_row['edge_pdb_satisfaction_rate']):.3f} | "
+                f"{float(proposed_row['edge_pdb_satisfaction_rate']):.3f} | "
+                f"{float(baseline_row['target_edge_queue_wait_ms']):.1f} | "
+                f"{float(proposed_row['target_edge_queue_wait_ms']):.1f} | "
+                f"{float(baseline_row['target_edge_completion_delay_ms']):.1f} | "
+                f"{float(proposed_row['target_edge_completion_delay_ms']):.1f} | "
+                f"{baseline_center_rate:.1f} | {proposed_center_rate:.1f} | {center_retention:.3f} |"
+            )
+        lines.extend(
+            [
+                "",
+                "| Label | baseline_prb_utilization | proposed_prb_utilization | baseline_center_prb_share | proposed_center_prb_share | baseline_edge_prb_share | proposed_edge_prb_share | baseline_backlog_bits | proposed_backlog_bits |",
+                "| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |",
+            ]
+        )
+        for case_row in typical_case_rows:
+            baseline_row = detail_by_case_and_policy.get((str(case_row["case_label"]), str(manifest["baseline_policy"])))
+            proposed_row = detail_by_case_and_policy.get((str(case_row["case_label"]), str(manifest["ours_policy"])))
+            if baseline_row is None or proposed_row is None:
+                continue
+            lines.append(
+                f"| {case_row['case_label']} | {float(baseline_row['prb_utilization']):.3f} | "
+                f"{float(proposed_row['prb_utilization']):.3f} | "
+                f"{float(baseline_row['center_prb_share']):.3f} | {float(proposed_row['center_prb_share']):.3f} | "
+                f"{float(baseline_row['edge_prb_share']):.3f} | {float(proposed_row['edge_prb_share']):.3f} | "
+                f"{float(baseline_row['edge_backlog_bits']):.1f} | {float(proposed_row['edge_backlog_bits']):.1f} |"
+            )
+    lines.extend(
+        [
+            "",
+            "## Summary",
+            "",
+            f"- Proposed improves `{len(improved_rows)}/{len(scene_rows)}` load-ratio scene points; best gain is "
+            f"`{0.0 if best_gain_row is None else float(best_gain_row['mean_delta_pdb_satisfaction_rate']):.3f}`.",
+            f"- Mean center throughput retention is `{_mean_metric(scene_rows, 'mean_center_throughput_retention'):.3f}`; "
+            f"worst retained point is `{1.0 if worst_cost_row is None else float(worst_cost_row['mean_center_throughput_retention']):.3f}`.",
+            f"- Boundary expansion adds `{boundary_95_summary['expanded_points']}` points at 95% and "
+            f"`{boundary_90_summary['expanded_points']}` points at 90%.",
+        ]
+    )
+    return "\n".join(lines)
 
 
 def _summary_report(
@@ -138,6 +674,17 @@ def _summary_report(
     boundary_rows_95: list[dict[str, object]],
     boundary_rows_90: list[dict[str, object]],
 ) -> str:
+    if str(manifest.get("scan_mode", "")) == "load_ratio":
+        return _load_ratio_summary_report(
+            manifest=manifest,
+            scene_rows=scene_rows,
+            region_rows=region_rows,
+            typical_case_rows=typical_case_rows,
+            typical_case_detail_rows=typical_case_detail_rows,
+            boundary_rows_95=boundary_rows_95,
+            boundary_rows_90=boundary_rows_90,
+        )
+
     improved_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) > 0.0]
     worsened_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) < 0.0]
     neutral_rows = [row for row in scene_rows if float(row["mean_delta_pdb_satisfaction_rate"]) == 0.0]
@@ -402,17 +949,74 @@ def main() -> int:
 
     baseline_policy = str(sweep["baseline_policy"])
     ours_policy = str(sweep["ours_policy"])
-    background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
+    scan_mode = str(sweep.get("mode", "legacy_grid"))
     reuse_output_dirs = [str(value) for value in sweep.get("reuse_output_dirs", [])]
     existing_raw_summaries = _reuse_raw_summaries(reuse_output_dirs)
-    existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(reuse_output_dirs)
     include_case = _include_case_from_sweep(sweep)
-    all_cases = systematic_cases(
-        background_user_counts=list(sweep["background_user_count_values"]),
-        pdb_user_counts=list(sweep["pdb_user_count_values"]),
-        pdb_ms_values=list(sweep["pdb_ms_values"]),
-        pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
-        include_case=include_case,
+    if scan_mode == "load_ratio":
+        capacity_reference = dict(sweep["capacity_reference"])
+        if "rho_bg_values" in sweep:
+            background_policy_payload = dict(sweep["mapping_policy"]["background"])
+            pdb_policy_payload = dict(sweep["mapping_policy"]["pdb"])
+            mapping_policy = LoadRatioMappingPolicy(
+                background=BackgroundMappingPolicy(
+                    background_user_count_values=[
+                        int(value) for value in background_policy_payload["background_user_count_values"]
+                    ],
+                    background_packet_kb_values=[
+                        float(value) for value in background_policy_payload["background_packet_kb_values"]
+                    ],
+                    background_period_ms_range=tuple(
+                        float(value) for value in background_policy_payload["background_period_ms_range"]
+                    ),
+                    anchor_background_user_count=int(background_policy_payload["anchor_background_user_count"]),
+                    anchor_background_packet_kb=float(background_policy_payload["anchor_background_packet_kb"]),
+                    kind=str(background_policy_payload.get("kind", "candidate_domain_solve_period")),
+                ),
+                pdb=PdbMappingPolicy(
+                    pdb_user_count_values=[int(value) for value in pdb_policy_payload["pdb_user_count_values"]],
+                    pdb_packet_kb_range=tuple(float(value) for value in pdb_policy_payload["pdb_packet_kb_range"]),
+                    anchor_pdb_user_count=int(pdb_policy_payload["anchor_pdb_user_count"]),
+                    kind=str(pdb_policy_payload.get("kind", "candidate_domain_solve_packet")),
+                ),
+            )
+            all_cases = load_ratio_cases(
+                rho_bg_values=[float(value) for value in sweep["rho_bg_values"]],
+                rho_pdb_values=[float(value) for value in sweep["rho_pdb_values"]],
+                pdb_ms_values=[int(value) for value in sweep["pdb_ms_values"]],
+                background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
+                pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
+                mapping_policy=mapping_policy,
+            )
+        else:
+            all_cases = load_ratio_cases(
+                background_user_count=int(sweep["background_user_count"]),
+                background_period_ms=int(sweep["background_period_ms"]),
+                background_packet_kb_values=[float(value) for value in sweep["background_packet_kb_values"]],
+                pdb_user_count=int(sweep["pdb_user_count"]),
+                pdb_shapes=list(sweep["pdb_shapes"]),
+                background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
+                pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
+            )
+        if include_case is not None:
+            all_cases = [case for case in all_cases if include_case(case)]
+        background_packet_bits_by_case = {
+            str(case.case_label): int(round(float(case.background_packet_kb) * 1000.0 * 8.0))
+            for case in all_cases
+        }
+    else:
+        all_cases = systematic_cases(
+            background_user_counts=list(sweep["background_user_count_values"]),
+            pdb_user_counts=list(sweep["pdb_user_count_values"]),
+            pdb_ms_values=list(sweep["pdb_ms_values"]),
+            pdb_packet_kb_values=list(sweep["pdb_packet_kb_values"]),
+            include_case=include_case,
+        )
+        background_packet_bits = int(sweep["background_packet_kb"]) * 1000 * 8
+        background_packet_bits_by_case = {str(scene_key(case.__dict__)): background_packet_bits for case in all_cases}
+    existing_per_run_rows, existing_paired_rows, reused_scene_keys = _reuse_rows(
+        reuse_output_dirs,
+        load_ratio_cases_to_match=all_cases if scan_mode == "load_ratio" else None,
     )
     cases_to_run = [case for case in all_cases if scene_key(case.__dict__) not in reused_scene_keys]
     per_run_rows: list[dict[str, object]] = []
@@ -423,10 +1027,16 @@ def main() -> int:
         bank_seed = int(sweep["random_seed_base"]) + repeat_index
         bank = build_realization_bank(base_config, scene_bank_spec=scene_bank_spec, bank_seed=bank_seed)
         for case in cases_to_run:
+            case_label = str(getattr(case, "case_label", ""))
             scenario_id = (
                 f"bg{case.background_user_count}_pdb{case.pdb_user_count}_"
                 f"d{case.pdb_ms}_k{case.pdb_packet_kb}_seed{repeat_index:02d}"
             )
+            if case_label:
+                scenario_id = f"{scenario_id}_{case_label}"
+            case_background_packet_bits = background_packet_bits_by_case[
+                case_label if case_label else str(scene_key(case.__dict__))
+            ]
             summaries_by_policy: dict[str, dict[str, float]] = {}
             for policy in (baseline_policy, ours_policy):
                 case_config = replace(
@@ -440,8 +1050,8 @@ def main() -> int:
                     background_user_count=case.background_user_count,
                     pdb_user_count=case.pdb_user_count,
                     pdb_ms=case.pdb_ms,
-                    pdb_packet_bits=int(case.pdb_packet_kb) * 1000 * 8,
-                    background_packet_bits=background_packet_bits,
+                    pdb_packet_bits=int(round(float(case.pdb_packet_kb) * 1000.0 * 8.0)),
+                    background_packet_bits=case_background_packet_bits,
                 )
                 collector = MetricsCollector()
                 summary = UlSimulator(case_config, users, collector).run()
@@ -453,24 +1063,22 @@ def main() -> int:
                         "summary": summary,
                     }
                 )
-                per_run_rows.append(
-                    per_run_metric_row(
-                        scenario_id=scenario_id,
-                        seed=bank_seed,
-                        policy=policy,
-                        case=case,
-                        summary=summary,
-                    )
-                )
-                summaries_by_policy[policy] = summary
-            paired_rows.append(
-                paired_metric_row(
-                    case=case,
+                per_run_row = per_run_metric_row(
+                    scenario_id=scenario_id,
                     seed=bank_seed,
-                    baseline_summary=summaries_by_policy[baseline_policy],
-                    proposed_summary=summaries_by_policy[ours_policy],
+                    policy=policy,
+                    case=case,
+                    summary=summary,
                 )
+                per_run_rows.append(per_run_row)
+                summaries_by_policy[policy] = summary
+            paired_row = paired_metric_row(
+                case=case,
+                seed=bank_seed,
+                baseline_summary=summaries_by_policy[baseline_policy],
+                proposed_summary=summaries_by_policy[ours_policy],
             )
+            paired_rows.append(paired_row)
 
     merged_per_run_rows = merge_row_sets(existing_rows=existing_per_run_rows, new_rows=per_run_rows)
     merged_paired_rows = merge_row_sets(existing_rows=existing_paired_rows, new_rows=paired_rows)
@@ -489,8 +1097,70 @@ def main() -> int:
     boundary_rows_95 = build_boundary_feasibility_rows(scene_rows, threshold=0.95)
     boundary_rows_90 = build_boundary_feasibility_rows(scene_rows, threshold=0.90)
     final_output_dir = Path(str(sweep.get("merged_output_dir", output_dir)))
+    manifest_sweep = dict(sweep)
+    if scan_mode == "load_ratio":
+        if "rho_bg_values" in sweep:
+            manifest_sweep.update(
+                {
+                    "rho_bg_values": [float(value) for value in sweep["rho_bg_values"]],
+                    "rho_pdb_values": [float(value) for value in sweep["rho_pdb_values"]],
+                    "pdb_ms_values": [int(value) for value in sweep["pdb_ms_values"]],
+                    "mapping_policy": {
+                        "background": {
+                            "kind": str(sweep["mapping_policy"]["background"].get("kind", "candidate_domain_solve_period")),
+                            "background_user_count_values": [
+                                int(value) for value in sweep["mapping_policy"]["background"]["background_user_count_values"]
+                            ],
+                            "background_packet_kb_values": [
+                                float(value) for value in sweep["mapping_policy"]["background"]["background_packet_kb_values"]
+                            ],
+                            "background_period_ms_range": [
+                                float(value) for value in sweep["mapping_policy"]["background"]["background_period_ms_range"]
+                            ],
+                            "anchor_background_user_count": int(
+                                sweep["mapping_policy"]["background"]["anchor_background_user_count"]
+                            ),
+                            "anchor_background_packet_kb": float(
+                                sweep["mapping_policy"]["background"]["anchor_background_packet_kb"]
+                            ),
+                        },
+                        "pdb": {
+                            "kind": str(sweep["mapping_policy"]["pdb"].get("kind", "candidate_domain_solve_packet")),
+                            "pdb_user_count_values": [
+                                int(value) for value in sweep["mapping_policy"]["pdb"]["pdb_user_count_values"]
+                            ],
+                            "pdb_packet_kb_range": [
+                                float(value) for value in sweep["mapping_policy"]["pdb"]["pdb_packet_kb_range"]
+                            ],
+                            "anchor_pdb_user_count": int(sweep["mapping_policy"]["pdb"]["anchor_pdb_user_count"]),
+                        },
+                    },
+                }
+            )
+        else:
+            manifest_sweep.update(
+                {
+                    "background_user_count_values": [int(sweep["background_user_count"])],
+                    "pdb_user_count_values": [int(sweep["pdb_user_count"])],
+                    "pdb_ms_values": [int(shape["pdb_ms"]) for shape in sweep["pdb_shapes"]],
+                    "pdb_packet_kb_values": [
+                        float(value)
+                        for shape in sweep["pdb_shapes"]
+                        for value in shape["pdb_packet_kb_values"]
+                    ],
+                    "background_packet_kb_values": [float(value) for value in sweep["background_packet_kb_values"]],
+                    "pdb_shapes": [
+                        {
+                            "pdb_ms": int(shape["pdb_ms"]),
+                            "pdb_packet_kb_values": [float(value) for value in shape["pdb_packet_kb_values"]],
+                        }
+                        for shape in sweep["pdb_shapes"]
+                    ],
+                }
+            )
     manifest = {
-        **sweep,
+        **manifest_sweep,
+        "scan_mode": scan_mode,
         "reference_config": str(config_path),
         "scene_bank_counts": {
             "medium": scene_bank_spec.medium_count,

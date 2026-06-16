@@ -60,6 +60,7 @@ class CurrentRadioState:
     mcs_index: int
     bits_per_prb: int
     per_u_slot_prb_cap: int | None
+    bler: float = 0.0
 
 
 @dataclass(frozen=True)

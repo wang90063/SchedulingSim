@@ -21,7 +21,12 @@ from scheduling_sim.config import (
 from scheduling_sim.metrics import MetricsCollector
 from scheduling_sim.models import CurrentRadioState, LogicalChannel, Packet, PhasePlan, RadioProfile, TrafficProfile, UserEquipment
 from scheduling_sim.reporting import write_report
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, HopelessFrontInsertPolicy, TargetOnlyConstrainedInsertPolicy
+from scheduling_sim.reinsert import (
+    ConstrainedInsertPolicy,
+    HopelessFrontInsertPolicy,
+    HopelessTailAppendPolicy,
+    TargetOnlyConstrainedInsertPolicy,
+)
 from scheduling_sim.scenario import ScenarioFactory
 from scheduling_sim.simulator import UlSimulator
 
@@ -968,6 +973,20 @@ class SimulatorCycleTests(unittest.TestCase):
         users = ScenarioFactory(config).build_users()
         simulator = UlSimulator(config, users, DummyMetrics())
         self.assertIsInstance(simulator.reinsert, HopelessFrontInsertPolicy)
+
+    def test_supports_hopeless_tail_append_policy(self) -> None:
+        config = self._legacy_config(center_count=1, max_ue_per_slot=1)
+        config = AppConfig(
+            simulation=config.simulation,
+            resources=config.resources,
+            traffic=config.traffic,
+            radio=config.radio,
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="hopeless_tail_append"),
+            report=config.report,
+        )
+        users = ScenarioFactory(config).build_users()
+        simulator = UlSimulator(config, users, DummyMetrics())
+        self.assertIsInstance(simulator.reinsert, HopelessTailAppendPolicy)
 
 
 class MetricsTests(unittest.TestCase):

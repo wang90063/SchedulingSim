@@ -1,3 +1,5 @@
+import random
+
 from scheduling_sim.models import Packet, UserEquipment
 from scheduling_sim.pdb_arrivals import (
     build_periodic_pdb_schedule,
@@ -22,6 +24,7 @@ class UlSimulator:
         self.config = config
         self.users = users
         self.metrics = metrics
+        self._harq_rng = random.Random(int(getattr(config.simulation, "random_seed", 0)) ^ 0x48415251)
         self.queue = ActiveQueue()
         self.ranking = EpfRankingPolicy()
         self.diagnostic_collector = diagnostic_collector
@@ -452,6 +455,23 @@ class UlSimulator:
     ) -> None:
         remaining_budget = bits_budget
         user_class = "edge" if user.is_edge_user else "center"
+        state = user.current_radio_state
+        bler = state.bler if state is not None else 0.0
+        bits_per_prb = state.bits_per_prb if state is not None else 0
+        prbs_this_slot = -(-bits_budget // bits_per_prb) if bits_per_prb > 0 else 0
+        tb_failed = bler > 0.0 and self._harq_rng.random() < bler
+        if hasattr(self.metrics, "record_tx_outcome"):
+            self.metrics.record_tx_outcome(
+                user_class=user_class,
+                success=not tb_failed,
+                prb_count=prbs_this_slot,
+                in_analysis_window=in_analysis_window,
+            )
+        if tb_failed:
+            head = user.lc.head_packet
+            if head is not None:
+                head.retransmission_count += 1
+            return
         while remaining_budget > 0 and user.lc.head_packet is not None:
             packet = user.lc.head_packet
             bits_sent = min(packet.remaining_bits, remaining_budget)
@@ -491,6 +511,7 @@ class UlSimulator:
                     control_slot_count_while_pending=completed.control_slot_count_while_pending,
                     waiting_u_slot_count_before_first_service=completed.waiting_u_slot_count_before_first_service,
                     waiting_u_slot_count_after_first_service=completed.waiting_u_slot_count_after_first_service,
+                    retransmission_count=completed.retransmission_count,
                 )
         if user.lc.head_packet is None and self.queue.contains(user):
             self.queue.deactivate(user)

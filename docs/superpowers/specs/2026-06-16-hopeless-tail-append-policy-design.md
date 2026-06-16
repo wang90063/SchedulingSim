@@ -8,7 +8,10 @@ Add a minimal reinsertion-policy variant that reuses the current hopeless-detect
 - if no safe position exists, do **not** front-insert
 - instead, fall back to `tail_append`
 
-The purpose is narrow: test whether the current `high_cost` point can reduce center-side cost while preserving at least part of the `PDB` recovery seen with `hopeless_front_insert`.
+The purpose is now two-stage:
+
+1. implement the new fallback policy with minimal scheduler impact
+2. rerun the full rho-first 60-scene matrix so it can be compared against the existing `hopeless_front_insert` full-scan output
 
 ## Problem
 
@@ -96,14 +99,15 @@ This change covers:
 - one new reinsertion-policy name
 - simulator/CLI wiring so the policy can be selected like existing variants
 - focused tests for the hopeless fallback behavior
-- one focused experiment on the already-identified `high_cost` point
+- one reproducible full rho-first rerun using the new policy
+- post-run comparison against the already-finished `hopeless_front_insert` rho-first output
 
 This change does **not** cover:
 
-- a full rerun of the entire rho-first scan
 - any change to `EPF` ranking
 - any change to wireless realization-bank generation
 - any change to load-ratio mapping policy
+- any redesign of the current two-policy systematic-analysis runner
 
 ## Implementation Design
 
@@ -150,20 +154,50 @@ This keeps single-run checks and any downstream experiment scripts aligned with 
 
 ## Experiment Design
 
-Run only the already-known `high_cost` point, with the same wireless-environment control as the finished rho-first experiment:
+Run the full rho-first matrix, reusing the same experiment definition as the finished `hopeless_front_insert` scan:
 
 - same realization-bank construction rules
 - same `repeat_count = 10`
-- same paired comparison discipline across policies
+- same paired comparison discipline inside each rerun
 - same supply-side parameters and traffic mapping
 
-Policies to compare:
+The new rerun should use:
+
+- `tail_append`
+- `hopeless_tail_append`
+
+The existing finished output already provides the matching full-matrix reference for:
 
 - `tail_append`
 - `hopeless_front_insert`
-- `hopeless_tail_append`
 
-The focused experiment should reuse the existing systematic-analysis machinery where possible, but it does not need a full 60-point config.
+So the intended comparison set after the new rerun is:
+
+- existing rho-first output: `tail_append` vs `hopeless_front_insert`
+- new rho-first output: `tail_append` vs `hopeless_tail_append`
+
+This keeps the implementation small because the current systematic-analysis runner remains a two-policy tool.
+
+### Scene Coverage
+
+The rerun should cover the same 60 scene points defined by:
+
+- `rho_bg_values = [0.388, 0.582, 0.775, 0.969]`
+- `rho_pdb_values = [0.183, 0.366, 0.549]`
+- `pdb_ms_values = [20, 50, 100, 300, 500]`
+
+### Mechanism Spotlight
+
+Even though the rerun is panoramic, the previously identified `high_cost` point remains the main mechanism check:
+
+- `background_user_count = 40`
+- `pdb_user_count = 4`
+- `target_rho_bg = 0.775`
+- `target_rho_pdb = 0.549`
+- `background_packet_kb = 2.0`
+- `background_period_ms = 12.5`
+- `pdb_ms = 20`
+- `pdb_packet_kb = 3.0`
 
 ## Evaluation Metrics
 
@@ -183,10 +217,11 @@ Supporting readout:
 
 ## Success Criteria
 
-The experiment is useful if it answers both questions clearly:
+The experiment is useful if it answers all three questions clearly:
 
-1. compared with `hopeless_front_insert`, does `hopeless_tail_append` improve center-side cost
-2. compared with `tail_append`, does `hopeless_tail_append` retain any meaningful `PDB` gain
+1. scene-by-scene, compared with `tail_append`, does `hopeless_tail_append` recover meaningful `PDB` satisfaction
+2. scene-by-scene, compared with existing `hopeless_front_insert` results, does `hopeless_tail_append` reduce center-side cost
+3. at the representative `high_cost` point, is the center-throughput drop materially alleviated by removing the hopeless front insertion
 
 The policy is not required to dominate both baselines. This is a mechanism test, not a guaranteed product decision.
 
@@ -198,7 +233,7 @@ Use TDD and add only targeted coverage:
 - simulator test showing `UlSimulator` recognizes `hopeless_tail_append`
 - CLI test showing `--reinsert-policy hopeless_tail_append` is accepted
 
-The focused experiment itself is verification of the design hypothesis, not a unit-test substitute.
+The full rerun is verification of the design hypothesis, not a unit-test substitute.
 
 ## Risks
 
@@ -216,6 +251,4 @@ That is also acceptable; it means the `high_cost` damage is not primarily driven
 
 ### 3. Misinterpreting the result as a global conclusion
 
-This spec intentionally limits the first pass to one representative point.
-
-Any broader claim would require a follow-up scan after the mechanism is understood.
+This spec broadens the first pass to the full rho-first matrix, but conclusions must still stay within that matrix and wireless setup.

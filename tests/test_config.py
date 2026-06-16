@@ -10,6 +10,39 @@ from scheduling_sim.scenario import ScenarioFactory
 
 
 class ConfigLoaderTests(unittest.TestCase):
+    def test_backend_defaults_to_stable(self) -> None:
+        config_path = Path(__file__).resolve().parents[1] / "configs" / "edge_compare.json"
+        config = load_config(config_path)
+        self.assertEqual(config.radio.environment.backend, "stable")
+        self.assertEqual(config.radio.environment.sionna_nominal_re_per_user, 144)
+
+    def test_backend_sionna_is_parsed(self) -> None:
+        payload = {
+            "simulation": {"cycles": 1, "slot_duration_ms": 1, "tdd_pattern": "DSUUU", "random_seed": 7},
+            "resources": {"total_prb_per_u_slot": 24, "max_ue_per_slot": 8},
+            "traffic": {
+                "center": {"count": 1, "period_slots": 1, "packet_bits": 120, "pdb_ms": 30},
+                "edge": {"count": 1, "burst_cycle_interval": 2, "packet_bits": 2400, "pdb_ms": 15},
+            },
+            "radio": {
+                "environment": {
+                    "backend": "sionna",
+                    "sionna_nominal_re_per_user": 200,
+                    "mcs_table": [{"snr_db": 0.0, "mcs_index": 4, "bits_per_prb": 48}],
+                },
+                "center": {},
+                "edge": {},
+            },
+            "scheduler": {"ranking": "epf", "reinsert_policy": "tail_append"},
+            "report": {"output_dir": "outputs/_tmp", "keep_slot_trace": False},
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sionna.json"
+            path.write_text(json.dumps(payload), encoding="utf-8")
+            config = load_config(path)
+        self.assertEqual(config.radio.environment.backend, "sionna")
+        self.assertEqual(config.radio.environment.sionna_nominal_re_per_user, 200)
+
     def test_loads_edge_compare_config(self) -> None:
         config_path = Path(__file__).resolve().parents[1] / "configs" / "edge_compare.json"
         config = load_config(config_path)

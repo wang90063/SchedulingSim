@@ -17,6 +17,7 @@ class Packet:
     control_slot_count_while_pending: int = 0
     waiting_u_slot_count_before_first_service: int = 0
     waiting_u_slot_count_after_first_service: int = 0
+    retransmission_count: int = 0
 
 
 @dataclass

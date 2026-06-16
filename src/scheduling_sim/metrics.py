@@ -12,6 +12,8 @@ class MetricsCollector:
         self.served_bits_in_window_by_user: dict[str, int] = {}
         self.used_prb_by_group = {"center": 0, "edge": 0}
         self.used_prb_in_window_by_group = {"center": 0, "edge": 0}
+        self.retx_count_by_group = {"center": 0, "edge": 0}
+        self.wasted_prb_by_group = {"center": 0, "edge": 0}
         self.pdb_arrivals_in_window_set: set[str] = set()
         self.edge_pdb_arrivals_in_window_set: set[str] = set()
         self.pdb_packets_completed_in_window_set: set[str] = set()
@@ -41,6 +43,19 @@ class MetricsCollector:
         self.used_prb_by_group[normalized_class] += prb_count
         if in_analysis_window:
             self.used_prb_in_window_by_group[normalized_class] += prb_count
+
+    def record_tx_outcome(
+        self,
+        user_class: str,
+        success: bool,
+        prb_count: int,
+        in_analysis_window: bool = True,
+    ) -> None:
+        if success:
+            return
+        normalized_class = user_class if user_class in self.retx_count_by_group else "center"
+        self.retx_count_by_group[normalized_class] += 1
+        self.wasted_prb_by_group[normalized_class] += prb_count
 
     def record_packet_arrived(
         self,
@@ -118,6 +133,7 @@ class MetricsCollector:
         control_slot_count_while_pending: int = 0,
         waiting_u_slot_count_before_first_service: int = 0,
         waiting_u_slot_count_after_first_service: int = 0,
+        retransmission_count: int = 0,
     ) -> None:
         if pdb_ms is not None and arrival_in_analysis_window and user_class == "edge":
             self.pdb_arrivals_in_window_set.add(packet_id)
@@ -139,6 +155,7 @@ class MetricsCollector:
                 "control_slot_count_while_pending": control_slot_count_while_pending,
                 "waiting_u_slot_count_before_first_service": waiting_u_slot_count_before_first_service,
                 "waiting_u_slot_count_after_first_service": waiting_u_slot_count_after_first_service,
+                "retransmission_count": retransmission_count,
             }
         )
 
@@ -265,6 +282,7 @@ class MetricsCollector:
             "target_edge_pdb_met": False,
             "target_edge_served_bits": 0.0,
             "target_edge_remaining_bits": 0.0,
+            "target_edge_retransmission_count": 0,
         }
         if target_completed is not None:
             service_time_ms = float(int(target_completed.get("service_slot_count", 0)) * slot_duration_ms)
@@ -299,6 +317,7 @@ class MetricsCollector:
                 ),
                 "target_edge_served_bits": float(target_completed["bits_sent"]),
                 "target_edge_remaining_bits": 0.0,
+                "target_edge_retransmission_count": int(target_completed.get("retransmission_count", 0)),
             }
         elif target_pending is not None:
             packet = target_pending["packet"]
@@ -326,6 +345,7 @@ class MetricsCollector:
                 "target_edge_pdb_met": False,
                 "target_edge_served_bits": float(packet.served_bits),
                 "target_edge_remaining_bits": float(packet.remaining_bits),
+                "target_edge_retransmission_count": int(packet.retransmission_count),
             }
         target_ue_id = None
         if target_completed is not None:
@@ -413,5 +433,11 @@ class MetricsCollector:
                 else 0.0
             ),
             "edge_backlog_bits": float(edge_backlog_bits),
+            "center_retransmission_count": self.retx_count_by_group["center"],
+            "edge_retransmission_count": self.retx_count_by_group["edge"],
+            "retransmission_count": self.retx_count_by_group["center"] + self.retx_count_by_group["edge"],
+            "center_wasted_prb": self.wasted_prb_by_group["center"],
+            "edge_wasted_prb": self.wasted_prb_by_group["edge"],
+            "wasted_prb": self.wasted_prb_by_group["center"] + self.wasted_prb_by_group["edge"],
             **target_summary,
         }

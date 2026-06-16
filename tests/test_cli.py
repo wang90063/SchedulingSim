@@ -463,6 +463,26 @@ class CliSmokeTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("hopeless_front_insert", result.stdout)
 
+    def test_run_command_supports_hopeless_tail_append_override(self) -> None:
+        result = subprocess.run(
+            [
+                "python",
+                "-m",
+                "scheduling_sim.cli",
+                "run",
+                "configs/target_edge_compare.json",
+                "--reinsert-policy",
+                "hopeless_tail_append",
+            ],
+            cwd=Path(__file__).resolve().parents[1],
+            env={**os.environ, "PYTHONPATH": "src"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("hopeless_tail_append", result.stdout)
+
     def test_target_edge_pdb_sweep_script_runs(self) -> None:
         result = subprocess.run(
             [
@@ -1037,6 +1057,35 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual(manifest["ours_policy"], "hopeless_front_insert")
             paired_rows = (output_dir / "paired_rows.csv").read_text(encoding="utf-8")
             self.assertIn("delta_pdb_satisfaction_rate", paired_rows)
+
+    def test_systematic_simulation_analysis_runner_supports_hopeless_tail_append_ours_policy(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "systematic_hopeless_tail.json"
+            output_dir = Path(tmp) / "systematic-hopeless-tail-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
+            payload = json.loads(
+                (repo_root / "configs" / "systematic_simulation_analysis_option1.json").read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"]["background_user_count_values"] = [24]
+            payload["systematic_analysis"]["pdb_user_count_values"] = [4]
+            payload["systematic_analysis"]["pdb_ms_values"] = [100]
+            payload["systematic_analysis"]["pdb_packet_kb_values"] = [50]
+            payload["systematic_analysis"]["repeat_count"] = 1
+            payload["systematic_analysis"]["ours_policy"] = "hopeless_tail_append"
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["ours_policy"], "hopeless_tail_append")
 
     def test_systematic_simulation_analysis_runner_supports_load_ratio_config(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]

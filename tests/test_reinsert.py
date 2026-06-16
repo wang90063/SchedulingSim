@@ -2,7 +2,12 @@ import unittest
 
 from scheduling_sim.models import LogicalChannel, Packet, RadioProfile, TrafficProfile, UserEquipment
 from scheduling_sim.queue import ActiveQueue
-from scheduling_sim.reinsert import ConstrainedInsertPolicy, TailAppendPolicy, TargetOnlyConstrainedInsertPolicy
+from scheduling_sim.reinsert import (
+    ConstrainedInsertPolicy,
+    HopelessTailAppendPolicy,
+    TailAppendPolicy,
+    TargetOnlyConstrainedInsertPolicy,
+)
 
 
 class ReinsertionPolicyTests(unittest.TestCase):
@@ -122,6 +127,25 @@ class ReinsertionPolicyTests(unittest.TestCase):
             users[0],
             queue_wait_size=queue.size,
             service_bits_per_decision=40,
+            now_ms=12,
+            current_phase="S",
+            max_ue_per_slot=2,
+        )
+        ordered = [user.ue_id for user in queue.ordered_users()]
+        self.assertEqual(ordered[-1], users[0].ue_id)
+
+    def test_hopeless_tail_append_moves_hopeless_packet_to_queue_tail(self) -> None:
+        queue = ActiveQueue()
+        users = [self.make_ue(f"ue-{index}") for index in range(5)]
+        users[0].lc.head_packet.pdb_ms = 1
+        for user in users:
+            queue.activate(user)
+        policy = HopelessTailAppendPolicy()
+        policy.apply(
+            queue,
+            users[0],
+            queue_wait_size=queue.size,
+            service_bits_per_decision=0,
             now_ms=12,
             current_phase="S",
             max_ue_per_slot=2,

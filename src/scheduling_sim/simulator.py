@@ -10,6 +10,7 @@ from scheduling_sim.ranking import EpfRankingPolicy
 from scheduling_sim.reinsert import (
     ConstrainedInsertPolicy,
     HopelessFrontInsertPolicy,
+    HopelessTailAppendPolicy,
     TailAppendPolicy,
     TargetOnlyConstrainedInsertPolicy,
 )
@@ -32,6 +33,8 @@ class UlSimulator:
             self.reinsert = TargetOnlyConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         elif config.scheduler.reinsert_policy == "hopeless_front_insert":
             self.reinsert = HopelessFrontInsertPolicy(deadline_guard_ms=deadline_guard_ms)
+        elif config.scheduler.reinsert_policy == "hopeless_tail_append":
+            self.reinsert = HopelessTailAppendPolicy(deadline_guard_ms=deadline_guard_ms)
         else:
             self.reinsert = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         self._wireless_env_injected = wireless_env is not None

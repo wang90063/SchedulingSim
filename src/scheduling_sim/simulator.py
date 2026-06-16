@@ -64,30 +64,35 @@ class UlSimulator:
         if not mcs_table or not self._dynamic_radio_users():
             return None
         seed = getattr(self.config.simulation, "random_seed", 0)
-        return StableWirelessEnv(
-            WirelessEnvConfigView(
-                alpha=float(getattr(env_config, "alpha", 1.0)),
-                jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
-                scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
-                cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
-                carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
-                per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
-                noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
-                interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
-                shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
-                slow_fading_alpha=float(getattr(env_config, "slow_fading_alpha", getattr(env_config, "alpha", 1.0))),
-                slot_jitter_std_db=float(getattr(env_config, "slot_jitter_std_db", getattr(env_config, "jitter_std_db", 0.0))),
-                mcs_table=[
-                    McsEntryView(
-                        snr_db=float(entry.snr_db),
-                        mcs_index=int(entry.mcs_index),
-                        bits_per_prb=int(entry.bits_per_prb),
-                    )
-                    for entry in mcs_table
-                ],
-                seed=seed,
-            )
+        view = WirelessEnvConfigView(
+            alpha=float(getattr(env_config, "alpha", 1.0)),
+            jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
+            scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
+            cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
+            carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+            per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
+            noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
+            interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
+            shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
+            slow_fading_alpha=float(getattr(env_config, "slow_fading_alpha", getattr(env_config, "alpha", 1.0))),
+            slot_jitter_std_db=float(getattr(env_config, "slot_jitter_std_db", getattr(env_config, "jitter_std_db", 0.0))),
+            mcs_table=[
+                McsEntryView(
+                    snr_db=float(entry.snr_db),
+                    mcs_index=int(entry.mcs_index),
+                    bits_per_prb=int(entry.bits_per_prb),
+                )
+                for entry in mcs_table
+            ],
+            seed=seed,
+            backend=str(getattr(env_config, "backend", "stable")),
+            sionna_nominal_re_per_user=int(getattr(env_config, "sionna_nominal_re_per_user", 144)),
         )
+        if view.backend == "sionna":
+            from scheduling_sim.sionna_phy_env import SionnaPhyWirelessEnv
+
+            return SionnaPhyWirelessEnv(view)
+        return StableWirelessEnv(view)
 
     def _dynamic_radio_users(self) -> list[UserEquipment]:
         return [user for user in self.users if self._is_dynamic_radio_profile(user.radio_profile)]

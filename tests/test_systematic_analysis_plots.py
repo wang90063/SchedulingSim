@@ -87,6 +87,69 @@ class SystematicAnalysisPlotTests(unittest.TestCase):
         )
         self.assertTrue(math.isnan(value))
 
+    def test_relative_packet_gain_rows_use_packet_counts_against_baseline_satisfied(self) -> None:
+        module = _load_render_module()
+        rows = [
+            {
+                "policy": "tail_append",
+                "target_rho_bg": "0.388",
+                "target_rho_pdb": "0.184",
+                "background_user_count": "32",
+                "pdb_user_count": "4",
+                "pdb_ms": "20",
+                "pdb_packet_kb": "1.0",
+                "edge_pdb_satisfaction_rate": "0.25",
+                "pdb_arrivals_in_window": "100",
+            },
+            {
+                "policy": "hopeless_tail_append",
+                "target_rho_bg": "0.388",
+                "target_rho_pdb": "0.184",
+                "background_user_count": "32",
+                "pdb_user_count": "4",
+                "pdb_ms": "20",
+                "pdb_packet_kb": "1.0",
+                "edge_pdb_satisfaction_rate": "0.40",
+                "pdb_arrivals_in_window": "100",
+            },
+            {
+                "policy": "tail_append",
+                "target_rho_bg": "0.388",
+                "target_rho_pdb": "0.184",
+                "background_user_count": "32",
+                "pdb_user_count": "4",
+                "pdb_ms": "20",
+                "pdb_packet_kb": "1.0",
+                "edge_pdb_satisfaction_rate": "0.50",
+                "pdb_arrivals_in_window": "200",
+            },
+            {
+                "policy": "hopeless_tail_append",
+                "target_rho_bg": "0.388",
+                "target_rho_pdb": "0.184",
+                "background_user_count": "32",
+                "pdb_user_count": "4",
+                "pdb_ms": "20",
+                "pdb_packet_kb": "1.0",
+                "edge_pdb_satisfaction_rate": "0.45",
+                "pdb_arrivals_in_window": "200",
+            },
+        ]
+        relative_rows = module._relative_packet_gain_rows(
+            rows,
+            baseline_policy="tail_append",
+            proposed_policy="hopeless_tail_append",
+        )
+
+        self.assertEqual(len(relative_rows), 1)
+        self.assertAlmostEqual(float(relative_rows[0]["relative_packet_gain"]), 5.0 / 125.0)
+
+    def test_relative_packet_gain_heatmap_uses_signed_percentage_labels(self) -> None:
+        module = _load_render_module()
+
+        self.assertTrue(module._is_signed_heatmap_field("relative_packet_gain"))
+        self.assertEqual(module._heatmap_percent_label(0.04, signed=True), "+4.0%")
+
     def test_render_script_writes_overview_cost_and_boundary_plots(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:
@@ -604,6 +667,105 @@ class SystematicAnalysisPlotTests(unittest.TestCase):
                         "edge_backlog_bits": 0.0,
                     }
                 )
+            with (output_dir / "per_run_rows.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "seed",
+                        "scenario_id",
+                        "policy",
+                        "background_user_count",
+                        "pdb_user_count",
+                        "background_packet_kb",
+                        "background_period_ms",
+                        "pdb_ms",
+                        "pdb_packet_kb",
+                        "rho_bg",
+                        "rho_pdb",
+                        "prb_utilization",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L01_seed7",
+                        "policy": "tail_append",
+                        "background_user_count": 40,
+                        "pdb_user_count": 4,
+                        "background_packet_kb": 0.8,
+                        "background_period_ms": 10,
+                        "pdb_ms": 100,
+                        "pdb_packet_kb": 5.0,
+                        "rho_bg": 0.388,
+                        "rho_pdb": 0.183,
+                        "prb_utilization": 0.70,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "seed": 8,
+                        "scenario_id": "L01_seed8",
+                        "policy": "tail_append",
+                        "background_user_count": 40,
+                        "pdb_user_count": 4,
+                        "background_packet_kb": 0.8,
+                        "background_period_ms": 10,
+                        "pdb_ms": 100,
+                        "pdb_packet_kb": 5.0,
+                        "rho_bg": 0.388,
+                        "rho_pdb": 0.183,
+                        "prb_utilization": 0.74,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L02_seed7",
+                        "policy": "tail_append",
+                        "background_user_count": 40,
+                        "pdb_user_count": 4,
+                        "background_packet_kb": 1.2,
+                        "background_period_ms": 10,
+                        "pdb_ms": 100,
+                        "pdb_packet_kb": 10.0,
+                        "rho_bg": 0.582,
+                        "rho_pdb": 0.366,
+                        "prb_utilization": 0.92,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L03_seed7",
+                        "policy": "tail_append",
+                        "background_user_count": 40,
+                        "pdb_user_count": 4,
+                        "background_packet_kb": 0.8,
+                        "background_period_ms": 10,
+                        "pdb_ms": 300,
+                        "pdb_packet_kb": 15.0,
+                        "rho_bg": 0.388,
+                        "rho_pdb": 0.183,
+                        "prb_utilization": 0.81,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L03_seed7_proposed",
+                        "policy": "hopeless_front_insert",
+                        "background_user_count": 40,
+                        "pdb_user_count": 4,
+                        "background_packet_kb": 0.8,
+                        "background_period_ms": 10,
+                        "pdb_ms": 300,
+                        "pdb_packet_kb": 15.0,
+                        "rho_bg": 0.388,
+                        "rho_pdb": 0.183,
+                        "prb_utilization": 0.82,
+                    }
+                )
             result = subprocess.run(
                 ["python", "scripts/render_systematic_simulation_analysis_plots.py", str(output_dir)],
                 cwd=repo_root,
@@ -617,7 +779,201 @@ class SystematicAnalysisPlotTests(unittest.TestCase):
             self.assertTrue((output_dir / "center_throughput_retention.png").exists())
             self.assertTrue((output_dir / "capacity_boundary_95.png").exists())
             self.assertTrue((output_dir / "capacity_boundary_90.png").exists())
+            self.assertTrue((output_dir / "baseline_prb_utilization_by_pdb_ms.png").exists())
             self.assertTrue((output_dir / "typical_case_critical.png").exists())
+
+    def test_renderer_writes_business_heatmaps_for_rho_first_user_count_axes(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            output_dir = Path(tmp)
+            (output_dir / "experiment_manifest.json").write_text(
+                json.dumps(
+                    {
+                        "scan_mode": "load_ratio",
+                        "rho_bg_values": [0.388],
+                        "rho_pdb_values": [0.184],
+                        "pdb_ms_values": [20],
+                        "explicit_background_user_count_values": [32, 40],
+                        "explicit_pdb_user_count_values": [4, 8],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (output_dir / "scene_summary.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "case_label",
+                        "target_rho_bg",
+                        "target_rho_pdb",
+                        "background_user_count",
+                        "pdb_user_count",
+                        "pdb_ms",
+                        "pdb_packet_kb",
+                        "mean_delta_pdb_satisfaction_rate",
+                        "mean_center_throughput_retention",
+                        "prb_share_pdb",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "case_label": "L01",
+                        "target_rho_bg": 0.388,
+                        "target_rho_pdb": 0.184,
+                        "background_user_count": 32,
+                        "pdb_user_count": 4,
+                        "pdb_ms": 20,
+                        "pdb_packet_kb": 1.0,
+                        "mean_delta_pdb_satisfaction_rate": 0.01,
+                        "mean_center_throughput_retention": 0.99,
+                        "prb_share_pdb": 0.30,
+                    }
+                )
+            for threshold in ("95", "90"):
+                with (output_dir / f"boundary_feasibility_{threshold}.csv").open("w", encoding="utf-8", newline="") as handle:
+                    writer = csv.DictWriter(
+                        handle,
+                        fieldnames=[
+                            "case_label",
+                            "target_rho_bg",
+                            "target_rho_pdb",
+                            "background_user_count",
+                            "pdb_user_count",
+                            "pdb_ms",
+                            "pdb_packet_kb",
+                            "prb_share_pdb",
+                            "baseline_feasible",
+                            "proposed_feasible",
+                        ],
+                    )
+                    writer.writeheader()
+                    writer.writerow(
+                        {
+                            "case_label": "L01",
+                            "target_rho_bg": 0.388,
+                            "target_rho_pdb": 0.184,
+                            "background_user_count": 32,
+                            "pdb_user_count": 4,
+                            "pdb_ms": 20,
+                            "pdb_packet_kb": 1.0,
+                            "prb_share_pdb": 0.30,
+                            "baseline_feasible": 1,
+                            "proposed_feasible": 1,
+                        }
+                    )
+            with (output_dir / "typical_case_details.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "case_label",
+                        "policy",
+                        "background_user_count",
+                        "pdb_user_count",
+                        "pdb_ms",
+                        "pdb_packet_kb",
+                        "edge_pdb_satisfaction_rate",
+                        "center_agg_rate_bps",
+                        "center_avg_rate_bps",
+                        "prb_utilization",
+                        "center_prb_share",
+                        "edge_prb_share",
+                        "pdb_arrivals_in_window",
+                        "pdb_violation_rate",
+                        "target_edge_completion_delay_ms",
+                        "target_edge_queue_wait_ms",
+                        "target_edge_service_time_ms",
+                        "edge_backlog_bits",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "case_label": "L01",
+                        "policy": "tail_append",
+                        "background_user_count": 32,
+                        "pdb_user_count": 4,
+                        "pdb_ms": 20,
+                        "pdb_packet_kb": 1.0,
+                        "edge_pdb_satisfaction_rate": 0.80,
+                        "center_agg_rate_bps": 1000.0,
+                        "center_avg_rate_bps": 50.0,
+                        "prb_utilization": 0.70,
+                        "center_prb_share": 0.60,
+                        "edge_prb_share": 0.40,
+                        "pdb_arrivals_in_window": 8.0,
+                        "pdb_violation_rate": 0.20,
+                        "target_edge_completion_delay_ms": 30.0,
+                        "target_edge_queue_wait_ms": 10.0,
+                        "target_edge_service_time_ms": 20.0,
+                        "edge_backlog_bits": 0.0,
+                    }
+                )
+            with (output_dir / "per_run_rows.csv").open("w", encoding="utf-8", newline="") as handle:
+                writer = csv.DictWriter(
+                    handle,
+                    fieldnames=[
+                        "seed",
+                        "scenario_id",
+                        "policy",
+                        "target_rho_bg",
+                        "target_rho_pdb",
+                        "background_user_count",
+                        "pdb_user_count",
+                        "pdb_ms",
+                        "pdb_packet_kb",
+                        "prb_utilization",
+                        "edge_pdb_satisfaction_rate",
+                        "pdb_arrivals_in_window",
+                    ],
+                )
+                writer.writeheader()
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L01_seed7_baseline",
+                        "policy": "tail_append",
+                        "target_rho_bg": 0.388,
+                        "target_rho_pdb": 0.184,
+                        "background_user_count": 32,
+                        "pdb_user_count": 4,
+                        "pdb_ms": 20,
+                        "pdb_packet_kb": 1.0,
+                        "prb_utilization": 0.70,
+                        "edge_pdb_satisfaction_rate": 0.50,
+                        "pdb_arrivals_in_window": 100,
+                    }
+                )
+                writer.writerow(
+                    {
+                        "seed": 7,
+                        "scenario_id": "L01_seed7_proposed",
+                        "policy": "hopeless_tail_append",
+                        "target_rho_bg": 0.388,
+                        "target_rho_pdb": 0.184,
+                        "background_user_count": 32,
+                        "pdb_user_count": 4,
+                        "pdb_ms": 20,
+                        "pdb_packet_kb": 1.0,
+                        "prb_utilization": 0.72,
+                        "edge_pdb_satisfaction_rate": 0.60,
+                        "pdb_arrivals_in_window": 100,
+                    }
+                )
+            result = subprocess.run(
+                ["python", "scripts/render_systematic_simulation_analysis_plots.py", str(output_dir)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            self.assertTrue((output_dir / "business_delta_pdb_satisfaction.png").exists())
+            self.assertTrue((output_dir / "business_center_throughput_retention.png").exists())
+            self.assertTrue((output_dir / "faceted_business_delta_pdb_satisfaction_pdb20.png").exists())
+            self.assertTrue((output_dir / "faceted_business_center_throughput_retention_pdb20.png").exists())
+            self.assertTrue((output_dir / "faceted_baseline_prb_utilization_pdb20.png").exists())
 
 
 if __name__ == "__main__":

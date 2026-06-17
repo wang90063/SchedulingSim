@@ -273,6 +273,28 @@ def solve_background_mapping(
     return candidates[0][3]
 
 
+def solve_background_mapping_for_fixed_user_count(
+    *,
+    target_rho_bg: float,
+    background_capacity_mbps: float,
+    background_user_count: int,
+    policy: BackgroundMappingPolicy,
+) -> BackgroundMappingResult:
+    fixed_policy = BackgroundMappingPolicy(
+        background_user_count_values=[int(background_user_count)],
+        background_packet_kb_values=list(policy.background_packet_kb_values),
+        background_period_ms_range=policy.background_period_ms_range,
+        anchor_background_user_count=policy.anchor_background_user_count,
+        anchor_background_packet_kb=policy.anchor_background_packet_kb,
+        kind=policy.kind,
+    )
+    return solve_background_mapping(
+        target_rho_bg=target_rho_bg,
+        background_capacity_mbps=background_capacity_mbps,
+        policy=fixed_policy,
+    )
+
+
 def solve_pdb_mapping(
     *,
     target_rho_pdb: float,
@@ -336,6 +358,28 @@ def solve_pdb_mapping(
         )
     )
     return candidates[0][3]
+
+
+def solve_pdb_mapping_for_fixed_user_count(
+    *,
+    target_rho_pdb: float,
+    pdb_ms: int,
+    pdb_capacity_mbps: float,
+    pdb_user_count: int,
+    policy: PdbMappingPolicy,
+) -> PdbMappingResult:
+    fixed_policy = PdbMappingPolicy(
+        pdb_user_count_values=[int(pdb_user_count)],
+        pdb_packet_kb_range=policy.pdb_packet_kb_range,
+        anchor_pdb_user_count=policy.anchor_pdb_user_count,
+        kind=policy.kind,
+    )
+    return solve_pdb_mapping(
+        target_rho_pdb=target_rho_pdb,
+        pdb_ms=pdb_ms,
+        pdb_capacity_mbps=pdb_capacity_mbps,
+        policy=fixed_policy,
+    )
 
 
 def _legacy_load_ratio_cases(
@@ -415,6 +459,8 @@ def _rho_first_load_ratio_cases(
     background_capacity_mbps: float,
     pdb_capacity_mbps: float,
     mapping_policy: LoadRatioMappingPolicy,
+    explicit_background_user_count_values: list[int] | None = None,
+    explicit_pdb_user_count_values: list[int] | None = None,
 ) -> list[LoadRatioCase]:
     if float(background_capacity_mbps) <= 0.0:
         raise ValueError("background_capacity_mbps must be > 0")
@@ -424,46 +470,75 @@ def _rho_first_load_ratio_cases(
     cases: list[LoadRatioCase] = []
     case_index = 1
     for target_rho_bg in rho_bg_values:
-        background_mapping = solve_background_mapping(
-            target_rho_bg=float(target_rho_bg),
-            background_capacity_mbps=float(background_capacity_mbps),
-            policy=mapping_policy.background,
+        background_user_counts = (
+            [int(value) for value in explicit_background_user_count_values]
+            if explicit_background_user_count_values is not None
+            else [None]
         )
-        for target_rho_pdb in rho_pdb_values:
-            for pdb_ms in pdb_ms_values:
-                pdb_mapping = solve_pdb_mapping(
-                    target_rho_pdb=float(target_rho_pdb),
-                    pdb_ms=int(pdb_ms),
-                    pdb_capacity_mbps=float(pdb_capacity_mbps),
-                    policy=mapping_policy.pdb,
+        for explicit_background_user_count in background_user_counts:
+            if explicit_background_user_count is None:
+                background_mapping = solve_background_mapping(
+                    target_rho_bg=float(target_rho_bg),
+                    background_capacity_mbps=float(background_capacity_mbps),
+                    policy=mapping_policy.background,
                 )
-                prb_share_pdb = (
-                    pdb_mapping.actual_rho_pdb / (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb)
-                    if (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb) > 0.0
-                    else 0.0
+            else:
+                background_mapping = solve_background_mapping_for_fixed_user_count(
+                    target_rho_bg=float(target_rho_bg),
+                    background_capacity_mbps=float(background_capacity_mbps),
+                    background_user_count=int(explicit_background_user_count),
+                    policy=mapping_policy.background,
                 )
-                cases.append(
-                    LoadRatioCase(
-                        case_label=f"L{case_index:02d}",
-                        background_user_count=background_mapping.background_user_count,
-                        background_packet_kb=background_mapping.background_packet_kb,
-                        background_period_ms=background_mapping.background_period_ms,
-                        pdb_user_count=pdb_mapping.pdb_user_count,
-                        pdb_packet_kb=pdb_mapping.pdb_packet_kb,
-                        pdb_ms=pdb_mapping.pdb_ms,
-                        target_rho_bg=float(target_rho_bg),
-                        target_rho_pdb=float(target_rho_pdb),
-                        actual_rho_bg=background_mapping.actual_rho_bg,
-                        actual_rho_pdb=pdb_mapping.actual_rho_pdb,
-                        rho_bg=background_mapping.actual_rho_bg,
-                        rho_pdb=pdb_mapping.actual_rho_pdb,
-                        prb_share_pdb=prb_share_pdb,
-                        g_pdb_mbps=(float(pdb_mapping.pdb_packet_kb) * 8.0) / float(pdb_mapping.pdb_ms),
-                        background_mapping_policy=background_mapping.mapping_policy,
-                        pdb_mapping_policy=pdb_mapping.mapping_policy,
+            for target_rho_pdb in rho_pdb_values:
+                for pdb_ms in pdb_ms_values:
+                    pdb_user_counts = (
+                        [int(value) for value in explicit_pdb_user_count_values]
+                        if explicit_pdb_user_count_values is not None
+                        else [None]
                     )
-                )
-                case_index += 1
+                    for explicit_pdb_user_count in pdb_user_counts:
+                        if explicit_pdb_user_count is None:
+                            pdb_mapping = solve_pdb_mapping(
+                                target_rho_pdb=float(target_rho_pdb),
+                                pdb_ms=int(pdb_ms),
+                                pdb_capacity_mbps=float(pdb_capacity_mbps),
+                                policy=mapping_policy.pdb,
+                            )
+                        else:
+                            pdb_mapping = solve_pdb_mapping_for_fixed_user_count(
+                                target_rho_pdb=float(target_rho_pdb),
+                                pdb_ms=int(pdb_ms),
+                                pdb_capacity_mbps=float(pdb_capacity_mbps),
+                                pdb_user_count=int(explicit_pdb_user_count),
+                                policy=mapping_policy.pdb,
+                            )
+                        prb_share_pdb = (
+                            pdb_mapping.actual_rho_pdb / (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb)
+                            if (background_mapping.actual_rho_bg + pdb_mapping.actual_rho_pdb) > 0.0
+                            else 0.0
+                        )
+                        cases.append(
+                            LoadRatioCase(
+                                case_label=f"L{case_index:02d}",
+                                background_user_count=background_mapping.background_user_count,
+                                background_packet_kb=background_mapping.background_packet_kb,
+                                background_period_ms=background_mapping.background_period_ms,
+                                pdb_user_count=pdb_mapping.pdb_user_count,
+                                pdb_packet_kb=pdb_mapping.pdb_packet_kb,
+                                pdb_ms=pdb_mapping.pdb_ms,
+                                target_rho_bg=float(target_rho_bg),
+                                target_rho_pdb=float(target_rho_pdb),
+                                actual_rho_bg=background_mapping.actual_rho_bg,
+                                actual_rho_pdb=pdb_mapping.actual_rho_pdb,
+                                rho_bg=background_mapping.actual_rho_bg,
+                                rho_pdb=pdb_mapping.actual_rho_pdb,
+                                prb_share_pdb=prb_share_pdb,
+                                g_pdb_mbps=(float(pdb_mapping.pdb_packet_kb) * 8.0) / float(pdb_mapping.pdb_ms),
+                                background_mapping_policy=background_mapping.mapping_policy,
+                                pdb_mapping_policy=pdb_mapping.mapping_policy,
+                            )
+                        )
+                        case_index += 1
     return cases
 
 
@@ -480,6 +555,8 @@ def load_ratio_cases(
     background_packet_kb_values: list[float] | None = None,
     pdb_user_count: int | None = None,
     pdb_shapes: list[dict[str, object]] | None = None,
+    explicit_background_user_count_values: list[int] | None = None,
+    explicit_pdb_user_count_values: list[int] | None = None,
 ) -> list[LoadRatioCase]:
     uses_rho_first = (
         rho_bg_values is not None
@@ -497,6 +574,8 @@ def load_ratio_cases(
             background_capacity_mbps=float(background_capacity_mbps),
             pdb_capacity_mbps=float(pdb_capacity_mbps),
             mapping_policy=mapping_policy,
+            explicit_background_user_count_values=explicit_background_user_count_values,
+            explicit_pdb_user_count_values=explicit_pdb_user_count_values,
         )
     if (
         background_user_count is None
@@ -534,7 +613,7 @@ def _has_load_ratio_key_fields(row: dict[str, object]) -> bool:
 
 def scene_key(
     row: dict[str, float | int | str],
-) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, int]:
+) -> tuple[int, int, int, int] | tuple[int, int, int, float, float, float]:
     has_background_packet_kb = _has_non_blank_value(row, "background_packet_kb")
     has_background_period_ms = _has_non_blank_value(row, "background_period_ms")
     if has_background_packet_kb and has_background_period_ms:
@@ -544,7 +623,7 @@ def scene_key(
             int(row["pdb_ms"]),
             float(row["pdb_packet_kb"]),
             float(row["background_packet_kb"]),
-            int(row["background_period_ms"]),
+            float(row["background_period_ms"]),
         )
     if has_background_packet_kb or has_background_period_ms:
         raise ValueError("load-ratio rows require both background_packet_kb and background_period_ms")
@@ -558,18 +637,18 @@ def scene_key(
 
 def scene_key_set(
     rows: list[dict[str, float | int | str]],
-) -> set[tuple[int, int, int, int] | tuple[int, int, int, float, float, int]]:
+) -> set[tuple[int, int, int, int] | tuple[int, int, int, float, float, float]]:
     return {scene_key(row) for row in rows}
 
 
-def load_ratio_scene_key(case: LoadRatioCase) -> tuple[int, int, int, float, float, int]:
+def load_ratio_scene_key(case: LoadRatioCase) -> tuple[int, int, int, float, float, float]:
     return (
         int(case.background_user_count),
         int(case.pdb_user_count),
         int(case.pdb_ms),
         float(case.pdb_packet_kb),
         float(case.background_packet_kb),
-        int(case.background_period_ms),
+        float(case.background_period_ms),
     )
 
 
@@ -840,12 +919,23 @@ def _background_templates(bank: RealizationBank, *, background_user_count: int) 
     return [*bank.medium_users[:per_class_count], *bank.good_users[:per_class_count]]
 
 
+def _ms_period_to_u_slot_period(base_config: AppConfig, period_ms: float) -> float:
+    u_slots_per_pattern = sum(1 for slot in base_config.simulation.tdd_pattern if slot == "U")
+    if u_slots_per_pattern <= 0:
+        raise ValueError("tdd_pattern must contain at least one U slot")
+    pattern_duration_ms = (
+        len(base_config.simulation.tdd_pattern)
+        * base_config.simulation.slot_duration_ms
+    )
+    return float(period_ms) * float(u_slots_per_pattern) / float(pattern_duration_ms)
+
+
 def _user_from_template(
     template: BankUserTemplate,
     *,
     packet_bits: int,
     pdb_ms: int | None,
-    period_slots: int | None = None,
+    period_slots: float | None = None,
 ) -> UserEquipment:
     traffic_profile = TrafficProfile(
         packet_bits=packet_bits,
@@ -881,16 +971,22 @@ def build_systematic_case_users(
     pdb_ms: int,
     pdb_packet_bits: int,
     background_packet_bits: int,
+    background_period_ms: float | None = None,
 ) -> list[UserEquipment]:
     if pdb_user_count > len(bank.poor_users):
         raise ValueError("pdb_user_count exceeds available poor templates")
+    background_period_slots = (
+        _ms_period_to_u_slot_period(base_config, float(background_period_ms))
+        if background_period_ms is not None
+        else base_config.traffic.center.period_slots
+    )
 
     background_users = [
         _user_from_template(
             template,
             packet_bits=background_packet_bits,
             pdb_ms=None,
-            period_slots=base_config.traffic.center.period_slots,
+            period_slots=background_period_slots,
         )
         for template in _background_templates(bank, background_user_count=background_user_count)
     ]

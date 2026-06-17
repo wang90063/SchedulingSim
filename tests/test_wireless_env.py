@@ -216,3 +216,8 @@ class StableWirelessEnvTests(unittest.TestCase):
         second = user.current_radio_state.snr_db
         self.assertEqual(first, 6.0)
         self.assertEqual(second, 5.0)
+
+    def test_stable_backend_leaves_bler_zero(self) -> None:
+        from scheduling_sim.models import CurrentRadioState
+        state = CurrentRadioState(snr_db=5.0, mcs_index=4, bits_per_prb=48, per_u_slot_prb_cap=None)
+        self.assertEqual(state.bler, 0.0)

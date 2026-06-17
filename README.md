@@ -32,7 +32,8 @@
 ### 环境要求
 
 - `Python >= 3.12`
-- 当前工程无第三方运行时依赖，直接用标准库即可运行
+- 默认（`stable` 无线后端）工程无第三方运行时依赖，直接用标准库即可运行
+- 可选的 `sionna` 无线后端需要额外环境：`Python 3.11` + `torch >= 2.9` + `sionna-no-rt`（见下方“Sionna 无线后端”一节）
 
 ### 运行单次仿真
 
@@ -101,6 +102,55 @@ PYTHONPATH=src python scripts/run_target_edge_sensitivity_report.py configs/targ
 PYTHONPATH=src python -m unittest discover -s tests -v
 ```
 
+## Sionna 无线后端（可选，引入误块与重传）
+
+默认的 `stable` 无线后端用确定性的 `SNR -> MCS -> bits_per_prb` 映射，传输必然成功。可选的 `sionna` 后端在此基础上接入 [NVIDIA Sionna SYS](https://github.com/NVlabs/sionna) 的物理层抽象（`PHYAbstraction`），为每个用户算出当前无线状态下的**块错误率（BLER）**，从而在 `U` 面传输时引入**误块与重传**：传输块按 BLER 做伯努利判决，失败的块不推进 `remaining_bits`、但 `PRB` 照算消耗，包会在下一轮自动重发。这对“边缘大包、低谱效、擦边 `PDB`”的研究场景尤其有意义。
+
+设计上 `Sionna` 只作为**确定性的 BLER 查询表**：重传的随机判决用的是工程自己的 `random.Random(seed)`，因此结果**完全可复现**（同一配置重复运行报告逐字节一致）。`torch`/`sionna` 仅在 `backend == "sionna"` 时惰性导入，默认 `stable` 路径仍然零运行时依赖。
+
+### 环境准备
+
+`sionna-no-rt` 不需要射线追踪部分，能绕开 `Mitsuba/RT` 在 macOS 上最容易出问题的依赖：
+
+```bash
+conda create -y -n scheduling-sim-sionna python=3.11
+conda activate scheduling-sim-sionna
+pip install sionna-no-rt
+```
+
+### 开启 sionna 后端
+
+在配置的 `radio.environment` 块里设置 `backend`：
+
+```json
+"environment": {
+  "backend": "sionna",
+  "sionna_nominal_re_per_user": 144,
+  "scenario_type": "uma",
+  "...": "其余字段与 stable 后端一致"
+}
+```
+
+- `backend`：`"stable"`（默认）或 `"sionna"`
+- `sionna_nominal_re_per_user`：算 BLER 时每用户的名义 `RE` 数（影响码块大小这一次要因素），默认 `144`
+
+运行示例配置（需在 conda 环境内）：
+
+```bash
+conda activate scheduling-sim-sionna
+PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare_sionna.json
+```
+
+### 新增的结果指标
+
+开启后报告会多出重传相关口径：
+
+- `retransmission_count` / `center_retransmission_count` / `edge_retransmission_count`
+- `wasted_prb` / `center_wasted_prb` / `edge_wasted_prb`（因误块而空耗的 `PRB`）
+- `target_edge_retransmission_count`（目标边缘包被 `NACK` 的次数）
+
+> 注意：`BLER` 取决于无线参数与 `MCS` 表门限。如果边缘 `SINR` 太低导致 `BLER` 接近 `1.0`，边缘大包可能始终传不完——这时需要调 `sionna_nominal_re_per_user`、`mcs_table` 的 `SINR` 门限或边缘距离，找到“会重传但仍能完成、`PDB` 擦边”的工作点。
+
 ## 核心机制亮点
 
 ### 1. `DSUUU` 时序是平台的一等公民
@@ -147,6 +197,8 @@ PYTHONPATH=src python -m unittest discover -s tests -v
 - 慢衰落平滑项与逐 slot 抖动
 
 这样，`EPF` 排序时看到的是**当前 slot 的瞬时速率**，而不是一个完全固定的静态速率。
+
+如果开启可选的 `sionna` 无线后端，还会进一步引入基于物理层抽象的**误块率(BLER)与重传**（见上方“Sionna 无线后端”一节）。
 
 ### 4. 算法、环境、业务模型是松耦合的
 

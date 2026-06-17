@@ -956,6 +956,16 @@ def main() -> int:
     if scan_mode == "load_ratio":
         capacity_reference = dict(sweep["capacity_reference"])
         if "rho_bg_values" in sweep:
+            explicit_background_user_count_values = (
+                [int(value) for value in sweep["background_user_count_values"]]
+                if "background_user_count_values" in sweep
+                else None
+            )
+            explicit_pdb_user_count_values = (
+                [int(value) for value in sweep["pdb_user_count_values"]]
+                if "pdb_user_count_values" in sweep
+                else None
+            )
             background_policy_payload = dict(sweep["mapping_policy"]["background"])
             pdb_policy_payload = dict(sweep["mapping_policy"]["pdb"])
             mapping_policy = LoadRatioMappingPolicy(
@@ -987,6 +997,8 @@ def main() -> int:
                 background_capacity_mbps=float(capacity_reference["background_capacity_mbps"]),
                 pdb_capacity_mbps=float(capacity_reference["pdb_capacity_mbps"]),
                 mapping_policy=mapping_policy,
+                explicit_background_user_count_values=explicit_background_user_count_values,
+                explicit_pdb_user_count_values=explicit_pdb_user_count_values,
             )
         else:
             all_cases = load_ratio_cases(
@@ -1052,6 +1064,11 @@ def main() -> int:
                     pdb_ms=case.pdb_ms,
                     pdb_packet_bits=int(round(float(case.pdb_packet_kb) * 1000.0 * 8.0)),
                     background_packet_bits=case_background_packet_bits,
+                    background_period_ms=(
+                        float(case.background_period_ms)
+                        if hasattr(case, "background_period_ms")
+                        else None
+                    ),
                 )
                 collector = MetricsCollector()
                 summary = UlSimulator(case_config, users, collector).run()
@@ -1105,6 +1122,16 @@ def main() -> int:
                     "rho_bg_values": [float(value) for value in sweep["rho_bg_values"]],
                     "rho_pdb_values": [float(value) for value in sweep["rho_pdb_values"]],
                     "pdb_ms_values": [int(value) for value in sweep["pdb_ms_values"]],
+                    "explicit_background_user_count_values": (
+                        [int(value) for value in sweep["background_user_count_values"]]
+                        if "background_user_count_values" in sweep
+                        else None
+                    ),
+                    "explicit_pdb_user_count_values": (
+                        [int(value) for value in sweep["pdb_user_count_values"]]
+                        if "pdb_user_count_values" in sweep
+                        else None
+                    ),
                     "mapping_policy": {
                         "background": {
                             "kind": str(sweep["mapping_policy"]["background"].get("kind", "candidate_domain_solve_period")),

@@ -1,3 +1,5 @@
+import random
+
 from scheduling_sim.models import Packet, UserEquipment
 from scheduling_sim.pdb_arrivals import (
     build_periodic_pdb_schedule,
@@ -22,6 +24,7 @@ class UlSimulator:
         self.config = config
         self.users = users
         self.metrics = metrics
+        self._harq_rng = random.Random(int(getattr(config.simulation, "random_seed", 0)) ^ 0x48415251)
         self.queue = ActiveQueue()
         self.ranking = EpfRankingPolicy()
         self.diagnostic_collector = diagnostic_collector
@@ -51,6 +54,14 @@ class UlSimulator:
             analysis_window_ms=self.analysis_window_ms,
         )
         self._next_periodic_arrival_index_by_ue = {ue_id: 0 for ue_id in self.periodic_pdb_schedule}
+        self._next_center_arrival_slot_by_ue = {
+            user.ue_id: 0.0
+            for user in self.users
+            if not user.is_edge_user
+            and getattr(user, "traffic_profile", None) is not None
+            and user.traffic_profile.period_slots
+            and user.traffic_profile.period_slots > 0
+        }
         self._next_packet_seq_by_ue = {user.ue_id: 0 for user in self.users}
         self._target_edge_marked = False
 
@@ -61,30 +72,35 @@ class UlSimulator:
         if not mcs_table or not self._dynamic_radio_users():
             return None
         seed = getattr(self.config.simulation, "random_seed", 0)
-        return StableWirelessEnv(
-            WirelessEnvConfigView(
-                alpha=float(getattr(env_config, "alpha", 1.0)),
-                jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
-                scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
-                cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
-                carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
-                per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
-                noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
-                interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
-                shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
-                slow_fading_alpha=float(getattr(env_config, "slow_fading_alpha", getattr(env_config, "alpha", 1.0))),
-                slot_jitter_std_db=float(getattr(env_config, "slot_jitter_std_db", getattr(env_config, "jitter_std_db", 0.0))),
-                mcs_table=[
-                    McsEntryView(
-                        snr_db=float(entry.snr_db),
-                        mcs_index=int(entry.mcs_index),
-                        bits_per_prb=int(entry.bits_per_prb),
-                    )
-                    for entry in mcs_table
-                ],
-                seed=seed,
-            )
+        view = WirelessEnvConfigView(
+            alpha=float(getattr(env_config, "alpha", 1.0)),
+            jitter_std_db=float(getattr(env_config, "jitter_std_db", 0.0)),
+            scenario_type=str(getattr(env_config, "scenario_type", "legacy")),
+            cell_radius_m=float(getattr(env_config, "cell_radius_m", 0.0)),
+            carrier_frequency_ghz=float(getattr(env_config, "carrier_frequency_ghz", 0.0)),
+            per_prb_tx_power_dbm=float(getattr(env_config, "per_prb_tx_power_dbm", 5.0)),
+            noise_figure_db=float(getattr(env_config, "noise_figure_db", 0.0)),
+            interference_margin_db=float(getattr(env_config, "interference_margin_db", 0.0)),
+            shadow_std_db=float(getattr(env_config, "shadow_std_db", 0.0)),
+            slow_fading_alpha=float(getattr(env_config, "slow_fading_alpha", getattr(env_config, "alpha", 1.0))),
+            slot_jitter_std_db=float(getattr(env_config, "slot_jitter_std_db", getattr(env_config, "jitter_std_db", 0.0))),
+            mcs_table=[
+                McsEntryView(
+                    snr_db=float(entry.snr_db),
+                    mcs_index=int(entry.mcs_index),
+                    bits_per_prb=int(entry.bits_per_prb),
+                )
+                for entry in mcs_table
+            ],
+            seed=seed,
+            backend=str(getattr(env_config, "backend", "stable")),
+            sionna_nominal_re_per_user=int(getattr(env_config, "sionna_nominal_re_per_user", 144)),
         )
+        if view.backend == "sionna":
+            from scheduling_sim.sionna_phy_env import SionnaPhyWirelessEnv
+
+            return SionnaPhyWirelessEnv(view)
+        return StableWirelessEnv(view)
 
     def _dynamic_radio_users(self) -> list[UserEquipment]:
         return [user for user in self.users if self._is_dynamic_radio_profile(user.radio_profile)]
@@ -171,6 +187,21 @@ class UlSimulator:
     def collect_candidates(self, phase: str):
         return self.queue.peek_head_k(self.config.resources.max_ue_per_slot)
 
+    def _decision_gap_after_phase(self, phase: str) -> int:
+        slot_duration_ms = int(self.config.simulation.slot_duration_ms)
+        return slot_duration_ms if phase == "D" else 4 * slot_duration_ms
+
+    def _track_candidate_miss_wait(self, candidates: list[UserEquipment], phase: str) -> None:
+        candidate_ids = {user.ue_id for user in candidates}
+        missed_wait_ms = self._decision_gap_after_phase(phase)
+        for user in self.queue.ordered_users():
+            if user.ue_id in candidate_ids:
+                continue
+            packet = user.lc.head_packet
+            if packet is None:
+                continue
+            packet.candidate_miss_wait_ms += missed_wait_ms
+
     def _record_radio_states(self, users: list[UserEquipment]) -> None:
         if not hasattr(self.metrics, "record_radio_state"):
             return
@@ -184,6 +215,7 @@ class UlSimulator:
                 self.wireless_env.refresh_slot(refresh_users, slot_index=slot_index, slot_name=phase)
                 self._record_radio_states(refresh_users)
         candidates = self.collect_candidates(phase)
+        self._track_candidate_miss_wait(candidates, phase)
         ranked = self.ranking.rank(candidates)
         if self.diagnostic_collector is not None:
             self.diagnostic_collector.capture(
@@ -331,8 +363,13 @@ class UlSimulator:
                     continue
                 if profile.burst_cycle_interval and (cycle_index + 1) % profile.burst_cycle_interval == 0 and u_slot_index == 0:
                     self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
-            elif profile.period_slots and global_slot % profile.period_slots == 0:
-                self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
+            elif profile.period_slots and profile.period_slots > 0:
+                next_arrival_slot = self._next_center_arrival_slot_by_ue.get(user.ue_id, 0.0)
+                if float(global_slot) + 1e-9 >= next_arrival_slot:
+                    self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
+                    self._next_center_arrival_slot_by_ue[user.ue_id] = (
+                        next_arrival_slot + float(profile.period_slots)
+                    )
 
     def _should_mark_target(self, user: UserEquipment) -> bool:
         if not user.is_edge_user or self._target_edge_marked:
@@ -452,6 +489,23 @@ class UlSimulator:
     ) -> None:
         remaining_budget = bits_budget
         user_class = "edge" if user.is_edge_user else "center"
+        state = user.current_radio_state
+        bler = state.bler if state is not None else 0.0
+        bits_per_prb = state.bits_per_prb if state is not None else 0
+        prbs_this_slot = -(-bits_budget // bits_per_prb) if bits_per_prb > 0 else 0
+        tb_failed = bler > 0.0 and self._harq_rng.random() < bler
+        if hasattr(self.metrics, "record_tx_outcome"):
+            self.metrics.record_tx_outcome(
+                user_class=user_class,
+                success=not tb_failed,
+                prb_count=prbs_this_slot,
+                in_analysis_window=in_analysis_window,
+            )
+        if tb_failed:
+            head = user.lc.head_packet
+            if head is not None:
+                head.retransmission_count += 1
+            return
         while remaining_budget > 0 and user.lc.head_packet is not None:
             packet = user.lc.head_packet
             bits_sent = min(packet.remaining_bits, remaining_budget)
@@ -491,6 +545,8 @@ class UlSimulator:
                     control_slot_count_while_pending=completed.control_slot_count_while_pending,
                     waiting_u_slot_count_before_first_service=completed.waiting_u_slot_count_before_first_service,
                     waiting_u_slot_count_after_first_service=completed.waiting_u_slot_count_after_first_service,
+                    candidate_miss_wait_ms=completed.candidate_miss_wait_ms,
+                    retransmission_count=completed.retransmission_count,
                 )
         if user.lc.head_packet is None and self.queue.contains(user):
             self.queue.deactivate(user)

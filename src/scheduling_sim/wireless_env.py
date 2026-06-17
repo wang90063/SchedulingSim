@@ -31,6 +31,8 @@ class WirelessEnvConfigView:
     slot_jitter_std_db: float = 0.0
     mcs_table: list[McsEntryView] = field(default_factory=list)
     seed: int = 0
+    backend: str = "stable"
+    sionna_nominal_re_per_user: int = 144
 
 
 class StableWirelessEnv:

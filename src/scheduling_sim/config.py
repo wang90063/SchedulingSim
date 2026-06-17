@@ -11,7 +11,7 @@ class TrafficConfig:
     count: int
     packet_bits: int
     pdb_ms: int | None
-    period_slots: int | None = None
+    period_slots: float | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
     arrival_mode: str = "single_burst"
@@ -63,6 +63,8 @@ class WirelessEnvConfig:
     center_distance_range_m: tuple[float, float] = (0.0, 0.0)
     edge_distance_range_m: tuple[float, float] = (0.0, 0.0)
     mcs_table: list[McsEntryConfig] = field(default_factory=list)
+    backend: str = "stable"
+    sionna_nominal_re_per_user: int = 144
 
 
 @dataclass(frozen=True)
@@ -226,6 +228,8 @@ def _load_wireless_env_config(
         center_distance_range_m=(float(center_distance[0]), float(center_distance[1])),  # type: ignore[index]
         edge_distance_range_m=(float(edge_distance[0]), float(edge_distance[1])),  # type: ignore[index]
         mcs_table=mcs_table,
+        backend=str(payload.get("backend", "stable")),
+        sionna_nominal_re_per_user=int(payload.get("sionna_nominal_re_per_user", 144)),
     )
 
 

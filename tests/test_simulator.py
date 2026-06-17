@@ -296,6 +296,20 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator.inject_packet(users[0], packet_bits=50, cycle_index=0, slot_name="U1")
         self.assertEqual(users[0].lc.eligible_cycle, 1)
 
+    def test_finish_phase_tracks_candidate_miss_wait_for_head_packets(self) -> None:
+        config = self._legacy_config(center_count=3, max_ue_per_slot=1)
+        users = ScenarioFactory(config).build_users()
+        simulator = UlSimulator(config, users, DummyMetrics())
+        simulator._preload_initial_backlog()
+        simulator.seed_active_queue(0)
+        waiting_packet = users[2].lc.head_packet
+        assert waiting_packet is not None
+
+        simulator.finish_phase("D", now_ms=0, slot_index=0)
+        simulator.finish_phase("S", now_ms=1, slot_index=1)
+
+        self.assertEqual(waiting_packet.candidate_miss_wait_ms, 5)
+
     def test_periodic_mode_does_not_preload_single_burst_packet(self) -> None:
         config = AppConfig(
             simulation=SimulationConfig(cycles=1, slot_duration_ms=1, tdd_pattern="DSUUU", random_seed=7),
@@ -817,6 +831,30 @@ class SimulatorCycleTests(unittest.TestCase):
         simulator = UlSimulator(config, users, DummyMetrics())
         simulator.run()
         self.assertEqual(users[0].average_throughput, 8.0)
+
+    def test_center_period_slots_supports_fractional_u_slot_intervals(self) -> None:
+        config = AppConfig(
+            simulation=SimulationConfig(
+                cycles=3,
+                slot_duration_ms=1,
+                tdd_pattern="DSUUU",
+            ),
+            resources=ResourcesConfig(total_prb_per_u_slot=10, max_ue_per_slot=1),
+            traffic=TrafficSection(
+                center=TrafficConfig(count=1, period_slots=2.5, packet_bits=10, pdb_ms=None),
+                edge=TrafficConfig(count=0, burst_cycle_interval=1, packet_bits=0, pdb_ms=15),
+            ),
+            radio=RadioSection(
+                center=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+                edge=RadioConfig(bits_per_prb=10, per_u_slot_prb_cap=10),
+            ),
+            scheduler=SchedulerConfig(ranking="epf", reinsert_policy="tail_append"),
+            report=ReportConfig(output_dir="outputs/demo", keep_slot_trace=False),
+        )
+        users = ScenarioFactory(config).build_users()
+        summary = UlSimulator(config, users, MetricsCollector()).run()
+
+        self.assertEqual(summary["center_completed_packets"], 4)
 
     def test_run_stops_after_target_edge_packet_finishes_when_configured(self) -> None:
         config = AppConfig(

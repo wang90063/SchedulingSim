@@ -1,3 +1,0 @@
-case_label,background_user_count,pdb_user_count,pdb_ms,pdb_packet_kb,baseline_edge_pdb_satisfaction_rate,proposed_edge_pdb_satisfaction_rate,mean_delta_pdb_satisfaction_rate,mean_center_throughput_retention
-overloaded,48,4,500,50,0.15125,0.24625,0.095,1.0184318056664998
-high_cost,48,4,300,150,0.0,0.001492620439988861,0.0014926204399,0.29482034315760003

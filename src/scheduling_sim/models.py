@@ -17,6 +17,7 @@ class Packet:
     control_slot_count_while_pending: int = 0
     waiting_u_slot_count_before_first_service: int = 0
     waiting_u_slot_count_after_first_service: int = 0
+    candidate_miss_wait_ms: int = 0
     retransmission_count: int = 0
 
 
@@ -68,7 +69,7 @@ class CurrentRadioState:
 class TrafficProfile:
     packet_bits: int
     pdb_ms: int | None
-    period_slots: int | None = None
+    period_slots: float | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
     arrival_mode: str = "single_burst"

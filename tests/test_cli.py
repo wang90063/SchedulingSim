@@ -1209,6 +1209,55 @@ class CliSmokeTests(unittest.TestCase):
             self.assertEqual({row["target_rho_bg"] for row in per_run_rows}, {"0.388"})
             self.assertEqual({row["target_rho_pdb"] for row in per_run_rows}, {"0.183"})
 
+    def test_systematic_simulation_analysis_runner_records_explicit_user_count_axes_for_rho_first_load_ratio_config(
+        self,
+    ) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as tmp:
+            config_path = Path(tmp) / "load_ratio_rho_first_user_count_axes.json"
+            output_dir = Path(tmp) / "load-ratio-rho-first-user-count-axes-output"
+            _write_nr_ul_main_table(Path(tmp), repo_root)
+            payload = json.loads(
+                (
+                    repo_root / "configs" / "systematic_simulation_analysis_load_ratio_rho_first_hopeless_tail_append.json"
+                ).read_text(encoding="utf-8")
+            )
+            payload["report"]["output_dir"] = str(output_dir)
+            payload["systematic_analysis"]["rho_bg_values"] = [0.388]
+            payload["systematic_analysis"]["rho_pdb_values"] = [0.183]
+            payload["systematic_analysis"]["pdb_ms_values"] = [50, 300]
+            payload["systematic_analysis"]["repeat_count"] = 1
+            payload["systematic_analysis"]["background_user_count_values"] = [32, 40, 48]
+            payload["systematic_analysis"]["pdb_user_count_values"] = [4, 8]
+            config_path.write_text(json.dumps(payload), encoding="utf-8")
+            result = subprocess.run(
+                ["python", "scripts/run_systematic_simulation_analysis.py", str(config_path)],
+                cwd=repo_root,
+                env={**os.environ, "PYTHONPATH": "src"},
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+
+            self.assertEqual(result.returncode, 0, msg=result.stderr)
+            manifest = json.loads((output_dir / "experiment_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["explicit_background_user_count_values"], [32, 40, 48])
+            self.assertEqual(manifest["explicit_pdb_user_count_values"], [4, 8])
+            with (output_dir / "per_run_rows.csv").open("r", encoding="utf-8", newline="") as handle:
+                per_run_rows = list(csv.DictReader(handle))
+            self.assertEqual(
+                {(row["background_user_count"], row["pdb_user_count"]) for row in per_run_rows},
+                {
+                    ("32", "4"),
+                    ("32", "8"),
+                    ("40", "4"),
+                    ("40", "8"),
+                    ("48", "4"),
+                    ("48", "8"),
+                },
+            )
+            self.assertEqual(len(per_run_rows), 24)
+
     def test_systematic_simulation_analysis_runner_writes_load_ratio_summary_report(self) -> None:
         repo_root = Path(__file__).resolve().parents[1]
         with tempfile.TemporaryDirectory() as tmp:

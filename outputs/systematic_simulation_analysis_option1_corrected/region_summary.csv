@@ -1,2 +1,0 @@
-region,scene_point_count,scene_point_share,proposed_win_rate,mean_delta_pdb_satisfaction_rate,mean_center_throughput_retention,mean_delta_prb_utilization,mean_delta_center_prb_share,mean_delta_edge_prb_share
-overloaded,81,1.0,0.12345679012345678,0.0036153514152876547,0.6389686800917951,3.02310857866534e-06,-0.03912256286622672,0.03912256286622672

@@ -11,7 +11,7 @@ class TrafficConfig:
     count: int
     packet_bits: int
     pdb_ms: int | None
-    period_slots: int | None = None
+    period_slots: float | None = None
     burst_cycle_interval: int | None = None
     gbr_bps: float = 0.0
     arrival_mode: str = "single_burst"

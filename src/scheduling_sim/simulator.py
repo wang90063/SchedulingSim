@@ -54,6 +54,14 @@ class UlSimulator:
             analysis_window_ms=self.analysis_window_ms,
         )
         self._next_periodic_arrival_index_by_ue = {ue_id: 0 for ue_id in self.periodic_pdb_schedule}
+        self._next_center_arrival_slot_by_ue = {
+            user.ue_id: 0.0
+            for user in self.users
+            if not user.is_edge_user
+            and getattr(user, "traffic_profile", None) is not None
+            and user.traffic_profile.period_slots
+            and user.traffic_profile.period_slots > 0
+        }
         self._next_packet_seq_by_ue = {user.ue_id: 0 for user in self.users}
         self._target_edge_marked = False
 
@@ -179,6 +187,21 @@ class UlSimulator:
     def collect_candidates(self, phase: str):
         return self.queue.peek_head_k(self.config.resources.max_ue_per_slot)
 
+    def _decision_gap_after_phase(self, phase: str) -> int:
+        slot_duration_ms = int(self.config.simulation.slot_duration_ms)
+        return slot_duration_ms if phase == "D" else 4 * slot_duration_ms
+
+    def _track_candidate_miss_wait(self, candidates: list[UserEquipment], phase: str) -> None:
+        candidate_ids = {user.ue_id for user in candidates}
+        missed_wait_ms = self._decision_gap_after_phase(phase)
+        for user in self.queue.ordered_users():
+            if user.ue_id in candidate_ids:
+                continue
+            packet = user.lc.head_packet
+            if packet is None:
+                continue
+            packet.candidate_miss_wait_ms += missed_wait_ms
+
     def _record_radio_states(self, users: list[UserEquipment]) -> None:
         if not hasattr(self.metrics, "record_radio_state"):
             return
@@ -192,6 +215,7 @@ class UlSimulator:
                 self.wireless_env.refresh_slot(refresh_users, slot_index=slot_index, slot_name=phase)
                 self._record_radio_states(refresh_users)
         candidates = self.collect_candidates(phase)
+        self._track_candidate_miss_wait(candidates, phase)
         ranked = self.ranking.rank(candidates)
         if self.diagnostic_collector is not None:
             self.diagnostic_collector.capture(
@@ -339,8 +363,13 @@ class UlSimulator:
                     continue
                 if profile.burst_cycle_interval and (cycle_index + 1) % profile.burst_cycle_interval == 0 and u_slot_index == 0:
                     self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
-            elif profile.period_slots and global_slot % profile.period_slots == 0:
-                self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
+            elif profile.period_slots and profile.period_slots > 0:
+                next_arrival_slot = self._next_center_arrival_slot_by_ue.get(user.ue_id, 0.0)
+                if float(global_slot) + 1e-9 >= next_arrival_slot:
+                    self.inject_packet(user, profile.packet_bits, cycle_index=cycle_index, slot_name=f"U{u_slot_index + 1}")
+                    self._next_center_arrival_slot_by_ue[user.ue_id] = (
+                        next_arrival_slot + float(profile.period_slots)
+                    )
 
     def _should_mark_target(self, user: UserEquipment) -> bool:
         if not user.is_edge_user or self._target_edge_marked:
@@ -516,6 +545,7 @@ class UlSimulator:
                     control_slot_count_while_pending=completed.control_slot_count_while_pending,
                     waiting_u_slot_count_before_first_service=completed.waiting_u_slot_count_before_first_service,
                     waiting_u_slot_count_after_first_service=completed.waiting_u_slot_count_after_first_service,
+                    candidate_miss_wait_ms=completed.candidate_miss_wait_ms,
                     retransmission_count=completed.retransmission_count,
                 )
         if user.lc.head_packet is None and self.queue.contains(user):

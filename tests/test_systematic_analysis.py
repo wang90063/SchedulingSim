@@ -131,6 +131,28 @@ class SystematicAnalysisTests(unittest.TestCase):
         large_ids = {user.ue_id for user in users_large}
         self.assertTrue(small_ids.issubset(large_ids))
 
+    def test_build_systematic_case_users_uses_case_background_period_when_supplied(self) -> None:
+        bank = build_realization_bank(self._base_config(), scene_bank_spec=self._scene_bank_spec(), bank_seed=7)
+        users = build_systematic_case_users(
+            self._base_config(),
+            bank,
+            background_user_count=24,
+            pdb_user_count=4,
+            pdb_ms=100,
+            pdb_packet_bits=50 * 1000 * 8,
+            background_packet_bits=2 * 1000 * 8,
+            background_period_ms=48.5,
+        )
+
+        background_periods = {
+            user.traffic_profile.period_slots
+            for user in users
+            if user.traffic_profile is not None and not user.is_edge_user
+        }
+        # Background arrivals are checked only at U slots. Convert the
+        # millisecond period into an equivalent U-slot interval for DSUUU.
+        self.assertEqual(background_periods, {29.1})
+
     def test_systematic_cases_emits_the_expected_81_point_matrix(self) -> None:
         cases = systematic_cases(
             background_user_counts=[24, 36, 48],
@@ -262,6 +284,101 @@ class SystematicAnalysisTests(unittest.TestCase):
         self.assertEqual(selected.background_user_count, 40)
         self.assertEqual(selected.background_packet_kb, 2.0)
 
+    def test_rho_first_cases_expand_over_explicit_user_count_axes(self) -> None:
+        cases = load_ratio_cases(
+            rho_bg_values=[0.388],
+            rho_pdb_values=[0.184],
+            pdb_ms_values=[20],
+            background_capacity_mbps=66.03,
+            pdb_capacity_mbps=8.74,
+            mapping_policy=systematic_analysis.LoadRatioMappingPolicy(
+                background=systematic_analysis.BackgroundMappingPolicy(
+                    background_user_count_values=[32, 40],
+                    background_packet_kb_values=[1.5, 2.0],
+                    background_period_ms_range=(4.0, 30.0),
+                    anchor_background_user_count=40,
+                    anchor_background_packet_kb=2.0,
+                ),
+                pdb=systematic_analysis.PdbMappingPolicy(
+                    pdb_user_count_values=[4, 8],
+                    pdb_packet_kb_range=(0.5, 80.0),
+                    anchor_pdb_user_count=4,
+                ),
+            ),
+            explicit_background_user_count_values=[32, 40],
+            explicit_pdb_user_count_values=[4, 8],
+        )
+
+        realized_pairs = {(case.background_user_count, case.pdb_user_count) for case in cases}
+        self.assertEqual(realized_pairs, {(32, 4), (32, 8), (40, 4), (40, 8)})
+        self.assertEqual(len(cases), 4)
+
+    def test_rho_first_explicit_user_count_solver_holds_counts_fixed(self) -> None:
+        result = systematic_analysis.solve_background_mapping_for_fixed_user_count(
+            target_rho_bg=0.582,
+            background_capacity_mbps=66.03,
+            background_user_count=32,
+            policy=systematic_analysis.BackgroundMappingPolicy(
+                background_user_count_values=[32, 40, 48],
+                background_packet_kb_values=[1.5, 2.0],
+                background_period_ms_range=(4.0, 30.0),
+                anchor_background_user_count=40,
+                anchor_background_packet_kb=2.0,
+            ),
+        )
+
+        self.assertEqual(result.background_user_count, 32)
+
+    def test_rho_first_explicit_pdb_user_count_solver_holds_counts_fixed(self) -> None:
+        result = systematic_analysis.solve_pdb_mapping_for_fixed_user_count(
+            target_rho_pdb=0.184,
+            pdb_ms=20,
+            pdb_capacity_mbps=8.74,
+            pdb_user_count=8,
+            policy=systematic_analysis.PdbMappingPolicy(
+                pdb_user_count_values=[4, 8],
+                pdb_packet_kb_range=(0.5, 80.0),
+                anchor_pdb_user_count=4,
+            ),
+        )
+
+        self.assertEqual(result.pdb_user_count, 8)
+        self.assertLess(abs(result.actual_rho_pdb - 0.184), 0.001)
+
+    def test_rho_first_lowload_candidates_are_mappable_with_relaxed_ranges(self) -> None:
+        if not hasattr(systematic_analysis, "solve_background_mapping"):
+            self.fail("solve_background_mapping should exist for rho-first load-ratio scans")
+        if not hasattr(systematic_analysis, "solve_pdb_mapping"):
+            self.fail("solve_pdb_mapping should exist for rho-first load-ratio scans")
+
+        background = systematic_analysis.solve_background_mapping(
+            target_rho_bg=0.10,
+            background_capacity_mbps=66.03,
+            policy=systematic_analysis.BackgroundMappingPolicy(
+                background_user_count_values=[32, 40, 48],
+                background_packet_kb_values=[1.0, 1.5, 2.0],
+                background_period_ms_range=(4.0, 60.0),
+                anchor_background_user_count=40,
+                anchor_background_packet_kb=2.0,
+            ),
+        )
+        pdb = systematic_analysis.solve_pdb_mapping(
+            target_rho_pdb=0.03,
+            pdb_ms=50,
+            pdb_capacity_mbps=8.74,
+            policy=systematic_analysis.PdbMappingPolicy(
+                pdb_user_count_values=[4, 8],
+                pdb_packet_kb_range=(0.2, 80.0),
+                anchor_pdb_user_count=4,
+            ),
+        )
+
+        self.assertGreaterEqual(background.background_period_ms, 30.0)
+        self.assertLessEqual(background.background_period_ms, 60.0)
+        self.assertAlmostEqual(background.actual_rho_bg, 0.10, places=2)
+        self.assertGreaterEqual(pdb.pdb_packet_kb, 0.2)
+        self.assertAlmostEqual(pdb.actual_rho_pdb, 0.03, places=2)
+
     def test_load_ratio_case_scene_key_remains_compatible_with_existing_pairing(self) -> None:
         case = LoadRatioCase(
             case_label="L01",
@@ -279,7 +396,7 @@ class SystematicAnalysisTests(unittest.TestCase):
 
         self.assertEqual(
             load_ratio_scene_key(case),
-            (40, 4, 100, 5.0, 0.8, 10),
+            (40, 4, 100, 5.0, 0.8, 10.0),
         )
 
     def test_load_ratio_case_scene_key_matches_row_key_for_generated_case(self) -> None:
@@ -319,9 +436,21 @@ class SystematicAnalysisTests(unittest.TestCase):
             "pdb_packet_kb": 5.0,
         }
 
-        self.assertEqual(scene_key(row_a), (40, 4, 100, 5.0, 0.8, 10))
-        self.assertEqual(scene_key(row_b), (40, 4, 100, 5.0, 1.2, 10))
+        self.assertEqual(scene_key(row_a), (40, 4, 100, 5.0, 0.8, 10.0))
+        self.assertEqual(scene_key(row_b), (40, 4, 100, 5.0, 1.2, 10.0))
         self.assertEqual(scene_key(legacy_row), (40, 4, 100, 5))
+
+    def test_scene_key_preserves_fractional_background_period_ms(self) -> None:
+        row = {
+            "background_user_count": 40,
+            "pdb_user_count": 4,
+            "pdb_ms": 100,
+            "pdb_packet_kb": 5.0,
+            "background_packet_kb": 2.0,
+            "background_period_ms": 48.5,
+        }
+
+        self.assertEqual(scene_key(row), (40, 4, 100, 5.0, 2.0, 48.5))
 
     def test_scene_key_raises_when_load_ratio_metadata_is_partial(self) -> None:
         with self.assertRaisesRegex(

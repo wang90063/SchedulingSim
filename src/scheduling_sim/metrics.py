@@ -133,6 +133,7 @@ class MetricsCollector:
         control_slot_count_while_pending: int = 0,
         waiting_u_slot_count_before_first_service: int = 0,
         waiting_u_slot_count_after_first_service: int = 0,
+        candidate_miss_wait_ms: int = 0,
         retransmission_count: int = 0,
     ) -> None:
         if pdb_ms is not None and arrival_in_analysis_window and user_class == "edge":
@@ -155,6 +156,7 @@ class MetricsCollector:
                 "control_slot_count_while_pending": control_slot_count_while_pending,
                 "waiting_u_slot_count_before_first_service": waiting_u_slot_count_before_first_service,
                 "waiting_u_slot_count_after_first_service": waiting_u_slot_count_after_first_service,
+                "candidate_miss_wait_ms": candidate_miss_wait_ms,
                 "retransmission_count": retransmission_count,
             }
         )

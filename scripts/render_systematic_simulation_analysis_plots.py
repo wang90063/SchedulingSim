@@ -145,6 +145,55 @@ def _ratio_scene_value(
     return math.nan
 
 
+def _business_scene_value(
+    rows: list[dict[str, str]],
+    *,
+    target_rho_bg: float,
+    target_rho_pdb: float,
+    pdb_ms: int,
+    background_user_count: int,
+    pdb_user_count: int,
+    field_name: str,
+    x_field: str,
+    y_field: str,
+) -> float:
+    for row in rows:
+        if (
+            int(row["pdb_ms"]) == pdb_ms
+            and int(row["background_user_count"]) == background_user_count
+            and int(row["pdb_user_count"]) == pdb_user_count
+            and math.isclose(float(row[x_field]), target_rho_bg, rel_tol=0.0, abs_tol=1e-9)
+            and math.isclose(float(row[y_field]), target_rho_pdb, rel_tol=0.0, abs_tol=1e-9)
+        ):
+            return float(row[field_name])
+    return math.nan
+
+
+def _business_baseline_prb_value(
+    rows: list[dict[str, str]],
+    *,
+    target_rho_bg: float,
+    target_rho_pdb: float,
+    pdb_ms: int,
+    background_user_count: int,
+    pdb_user_count: int,
+    x_field: str,
+    y_field: str,
+) -> float:
+    values = [
+        float(row["prb_utilization"])
+        for row in rows
+        if int(row["pdb_ms"]) == pdb_ms
+        and int(row["background_user_count"]) == background_user_count
+        and int(row["pdb_user_count"]) == pdb_user_count
+        and math.isclose(float(row[x_field]), target_rho_bg, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(float(row[y_field]), target_rho_pdb, rel_tol=0.0, abs_tol=1e-9)
+    ]
+    if not values:
+        return math.nan
+    return sum(values) / float(len(values))
+
+
 def _ratio_fields(manifest: dict[str, object], rows: list[dict[str, str]]) -> tuple[str, str]:
     if str(manifest.get("scan_mode", "")) != "load_ratio":
         raise ValueError("ratio fields are only valid for load-ratio manifests")
@@ -161,6 +210,155 @@ def _ratio_shape_pairs(manifest: dict[str, object], rows: list[dict[str, str]]) 
             for packet_kb in shape["pdb_packet_kb_values"]
         ]
     return sorted({(int(row["pdb_ms"]), float(row["pdb_packet_kb"])) for row in rows})
+
+
+def _per_run_baseline_prb_rows(output_dir: Path) -> list[dict[str, str]]:
+    path = output_dir / "per_run_rows.csv"
+    if not path.exists():
+        return []
+    rows = _rows(path)
+    return [row for row in rows if str(row.get("policy", "")) == "tail_append"]
+
+
+def _per_run_rows(output_dir: Path) -> list[dict[str, str]]:
+    path = output_dir / "per_run_rows.csv"
+    if not path.exists():
+        return []
+    return _rows(path)
+
+
+def _relative_packet_gain_rows(
+    rows: list[dict[str, str]],
+    *,
+    baseline_policy: str,
+    proposed_policy: str,
+) -> list[dict[str, str]]:
+    required_fields = {
+        "policy",
+        "edge_pdb_satisfaction_rate",
+        "pdb_arrivals_in_window",
+        "background_user_count",
+        "pdb_user_count",
+        "pdb_ms",
+    }
+    if not rows or not required_fields.issubset(rows[0]):
+        return []
+    x_field = "target_rho_bg" if "target_rho_bg" in rows[0] else "rho_bg"
+    y_field = "target_rho_pdb" if "target_rho_pdb" in rows[0] else "rho_pdb"
+    key_fields = [
+        x_field,
+        y_field,
+        "background_user_count",
+        "pdb_user_count",
+        "pdb_ms",
+    ]
+    groups: dict[tuple[str, ...], dict[str, object]] = {}
+    for row in rows:
+        policy = str(row.get("policy", ""))
+        if policy not in {baseline_policy, proposed_policy}:
+            continue
+        if x_field not in row or y_field not in row:
+            continue
+        key = tuple(str(row[field]) for field in key_fields)
+        group = groups.setdefault(
+            key,
+            {
+                "template": {field: str(row[field]) for field in key_fields},
+                "baseline_satisfied_packets": 0.0,
+                "proposed_satisfied_packets": 0.0,
+            },
+        )
+        satisfied_packets = float(row["edge_pdb_satisfaction_rate"]) * float(row["pdb_arrivals_in_window"])
+        if policy == baseline_policy:
+            group["baseline_satisfied_packets"] = float(group["baseline_satisfied_packets"]) + satisfied_packets
+        else:
+            group["proposed_satisfied_packets"] = float(group["proposed_satisfied_packets"]) + satisfied_packets
+
+    output_rows: list[dict[str, str]] = []
+    for key in sorted(groups):
+        group = groups[key]
+        baseline_satisfied = float(group["baseline_satisfied_packets"])
+        proposed_satisfied = float(group["proposed_satisfied_packets"])
+        template = dict(group["template"])  # type: ignore[arg-type]
+        template["relative_packet_gain"] = (
+            "NaN"
+            if baseline_satisfied == 0.0
+            else str((proposed_satisfied - baseline_satisfied) / baseline_satisfied)
+        )
+        template["baseline_satisfied_packets"] = str(baseline_satisfied)
+        template["proposed_satisfied_packets"] = str(proposed_satisfied)
+        output_rows.append(template)
+    return output_rows
+
+
+def _mean_baseline_prb(
+    rows: list[dict[str, str]],
+    *,
+    pdb_ms: int,
+    rho_bg: float,
+    rho_pdb: float,
+    x_field: str,
+    y_field: str,
+) -> float:
+    values = [
+        float(row["prb_utilization"])
+        for row in rows
+        if int(row["pdb_ms"]) == pdb_ms
+        and math.isclose(float(row[x_field]), rho_bg, rel_tol=0.0, abs_tol=1e-9)
+        and math.isclose(float(row[y_field]), rho_pdb, rel_tol=0.0, abs_tol=1e-9)
+    ]
+    if not values:
+        return math.nan
+    return sum(values) / float(len(values))
+
+
+def _ratio_prb_grid(
+    rows: list[dict[str, str]],
+    manifest: dict[str, object],
+    *,
+    title: str,
+    output_path: Path,
+) -> None:
+    x_field, y_field = _ratio_fields(manifest, rows)
+    rho_bg_values = sorted({float(row[x_field]) for row in rows})
+    rho_pdb_values = sorted({float(row[y_field]) for row in rows})
+    pdb_ms_values = sorted({int(row["pdb_ms"]) for row in rows})
+    fig, axes = plt.subplots(
+        1,
+        len(pdb_ms_values),
+        figsize=(5 * max(len(pdb_ms_values), 1), 5),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    vmin = min(float(row["prb_utilization"]) for row in rows)
+    vmax = max(float(row["prb_utilization"]) for row in rows)
+    for col_index, pdb_ms in enumerate(pdb_ms_values):
+        ax = axes[0][col_index]
+        matrix = [
+            [
+                _mean_baseline_prb(
+                    rows,
+                    pdb_ms=pdb_ms,
+                    rho_bg=rho_bg,
+                    rho_pdb=rho_pdb,
+                    x_field=x_field,
+                    y_field=y_field,
+                )
+                for rho_bg in rho_bg_values
+            ]
+            for rho_pdb in rho_pdb_values
+        ]
+        image = ax.imshow(matrix, aspect="auto", origin="lower", vmin=vmin, vmax=vmax, cmap="viridis")
+        image.cmap.set_bad(color="#d9d9d9")
+        ax.set_title(f"pdb_ms={pdb_ms}")
+        ax.set_xticks(range(len(rho_bg_values)), labels=[f"{value:.3f}" for value in rho_bg_values], rotation=20, ha="right")
+        ax.set_yticks(range(len(rho_pdb_values)), labels=[f"{value:.3f}" for value in rho_pdb_values])
+        ax.set_xlabel(x_field)
+        ax.set_ylabel(y_field)
+        fig.colorbar(image, ax=ax, shrink=0.80)
+    fig.suptitle(title)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
 
 
 def _ratio_grid(
@@ -231,6 +429,250 @@ def _ratio_grid(
         if x_values and y_values:
             fig.colorbar(scatter, ax=ax, shrink=0.80)
     fig.suptitle(f"{title} (marker size = prb_share_pdb)")
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
+def _business_ratio_grid(
+    rows: list[dict[str, str]],
+    manifest: dict[str, object],
+    *,
+    field_name: str,
+    title: str,
+    output_path: Path,
+) -> None:
+    x_field, y_field = _ratio_fields(manifest, rows)
+    rho_bg_values = [float(value) for value in manifest["rho_bg_values"]]
+    rho_pdb_values = [float(value) for value in manifest["rho_pdb_values"]]
+    pdb_ms_values = [int(value) for value in manifest["pdb_ms_values"]]
+    background_values = [int(value) for value in manifest["explicit_background_user_count_values"]]
+    pdb_user_values = [int(value) for value in manifest["explicit_pdb_user_count_values"]]
+    panels = [
+        (rho_bg, rho_pdb, pdb_ms)
+        for rho_bg in rho_bg_values
+        for rho_pdb in rho_pdb_values
+        for pdb_ms in pdb_ms_values
+    ]
+    values = [float(row[field_name]) for row in rows]
+    if field_name == "mean_delta_pdb_satisfaction_rate":
+        limit = max([abs(value) for value in values] + [0.01])
+        vmin, vmax, cmap = -limit, limit, "RdBu_r"
+    else:
+        vmin, vmax, cmap = min(values), max(values), "viridis"
+    fig, axes = plt.subplots(
+        1,
+        len(panels),
+        figsize=(4.6 * max(len(panels), 1), 4.2),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    for col_index, (target_rho_bg, target_rho_pdb, pdb_ms) in enumerate(panels):
+        ax = axes[0][col_index]
+        matrix = [
+            [
+                _business_scene_value(
+                    rows,
+                    target_rho_bg=target_rho_bg,
+                    target_rho_pdb=target_rho_pdb,
+                    pdb_ms=pdb_ms,
+                    background_user_count=background_user_count,
+                    pdb_user_count=pdb_user_count,
+                    field_name=field_name,
+                    x_field=x_field,
+                    y_field=y_field,
+                )
+                for background_user_count in background_values
+            ]
+            for pdb_user_count in pdb_user_values
+        ]
+        image = ax.imshow(matrix, aspect="auto", origin="lower", vmin=vmin, vmax=vmax, cmap=cmap)
+        image.cmap.set_bad(color="#d9d9d9")
+        ax.set_title(f"rho_bg={target_rho_bg:.3f}\nrho_pdb={target_rho_pdb:.3f}, pdb={pdb_ms}ms")
+        ax.set_xticks(range(len(background_values)), labels=[str(value) for value in background_values])
+        ax.set_yticks(range(len(pdb_user_values)), labels=[str(value) for value in pdb_user_values])
+        ax.set_xlabel("background_user_count")
+        ax.set_ylabel("pdb_user_count")
+        ax.set_xticks([tick - 0.5 for tick in range(1, len(background_values))], minor=True)
+        ax.set_yticks([tick - 0.5 for tick in range(1, len(pdb_user_values))], minor=True)
+        ax.grid(which="minor", color="white", linestyle="-", linewidth=1.5)
+    fig.colorbar(image, ax=axes.ravel().tolist(), shrink=0.80)
+    fig.suptitle(title)
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
+def _heatmap_percent_label(value: float, *, signed: bool) -> str:
+    if math.isnan(value):
+        return ""
+    if signed:
+        return f"{value * 100.0:+.1f}%"
+    return f"{value * 100.0:.1f}%"
+
+
+def _is_signed_heatmap_field(field_name: str) -> bool:
+    return field_name in {"mean_delta_pdb_satisfaction_rate", "relative_packet_gain"}
+
+
+def _add_heatmap_cell_annotations(
+    ax,
+    matrix: list[list[float]],
+    *,
+    signed: bool,
+) -> None:
+    for y_index, row in enumerate(matrix):
+        for x_index, value in enumerate(row):
+            label = _heatmap_percent_label(value, signed=signed)
+            if not label:
+                continue
+            text_color = "white" if abs(value) >= 0.55 else "black"
+            ax.text(x_index, y_index, label, ha="center", va="center", fontsize=7, color=text_color)
+
+
+def _add_heatmap_cell_boundaries(ax, *, width: int, height: int) -> None:
+    ax.set_xticks([tick - 0.5 for tick in range(1, width)], minor=True)
+    ax.set_yticks([tick - 0.5 for tick in range(1, height)], minor=True)
+    ax.grid(which="minor", color="white", linestyle="-", linewidth=1.8)
+    ax.tick_params(which="minor", bottom=False, left=False)
+
+
+def _business_metric_scale(rows: list[dict[str, str]], field_name: str) -> tuple[float, float, str]:
+    values = [
+        float(row[field_name])
+        for row in rows
+        if row.get(field_name, "") != "" and not math.isnan(float(row[field_name]))
+    ]
+    if not values:
+        return (0.0, 1.0, "viridis")
+    if _is_signed_heatmap_field(field_name):
+        limit = max([abs(value) for value in values] + [0.01])
+        return (-limit, limit, "RdBu_r")
+    lower = min(values)
+    upper = max(values)
+    if math.isclose(lower, upper, rel_tol=0.0, abs_tol=1e-12):
+        padding = max(abs(lower) * 0.01, 0.01)
+        return (lower - padding, upper + padding, "viridis")
+    return (lower, upper, "viridis")
+
+
+def _faceted_business_ratio_grid(
+    rows: list[dict[str, str]],
+    manifest: dict[str, object],
+    *,
+    field_name: str,
+    title: str,
+    pdb_ms: int,
+    output_path: Path,
+) -> None:
+    x_field, y_field = _ratio_fields(manifest, rows)
+    rho_bg_values = [float(value) for value in manifest["rho_bg_values"]]
+    rho_pdb_values = [float(value) for value in manifest["rho_pdb_values"]]
+    background_values = [int(value) for value in manifest["explicit_background_user_count_values"]]
+    pdb_user_values = [int(value) for value in manifest["explicit_pdb_user_count_values"]]
+    vmin, vmax, cmap = _business_metric_scale(rows, field_name)
+    fig, axes = plt.subplots(
+        len(rho_pdb_values),
+        len(rho_bg_values),
+        figsize=(4.4 * max(len(rho_bg_values), 1), 3.7 * max(len(rho_pdb_values), 1)),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    signed = _is_signed_heatmap_field(field_name)
+    last_image = None
+    for row_index, target_rho_pdb in enumerate(rho_pdb_values):
+        for col_index, target_rho_bg in enumerate(rho_bg_values):
+            ax = axes[row_index][col_index]
+            matrix = [
+                [
+                    _business_scene_value(
+                        rows,
+                        target_rho_bg=target_rho_bg,
+                        target_rho_pdb=target_rho_pdb,
+                        pdb_ms=pdb_ms,
+                        background_user_count=background_user_count,
+                        pdb_user_count=pdb_user_count,
+                        field_name=field_name,
+                        x_field=x_field,
+                        y_field=y_field,
+                    )
+                    for background_user_count in background_values
+                ]
+                for pdb_user_count in pdb_user_values
+            ]
+            last_image = ax.imshow(matrix, aspect="auto", origin="lower", vmin=vmin, vmax=vmax, cmap=cmap)
+            last_image.cmap.set_bad(color="#d9d9d9")
+            ax.set_title(f"rho_bg={target_rho_bg:.2f}, rho_pdb={target_rho_pdb:.2f}")
+            ax.set_xticks(range(len(background_values)), labels=[str(value) for value in background_values])
+            ax.set_yticks(range(len(pdb_user_values)), labels=[str(value) for value in pdb_user_values])
+            ax.set_xlabel("background_user_count")
+            ax.set_ylabel("pdb_user_count")
+            _add_heatmap_cell_boundaries(ax, width=len(background_values), height=len(pdb_user_values))
+            _add_heatmap_cell_annotations(ax, matrix, signed=signed)
+    if last_image is not None:
+        fig.colorbar(last_image, ax=axes.ravel().tolist(), shrink=0.80)
+    fig.suptitle(f"{title} (pdb_ms={pdb_ms}, cell text = percentage)")
+    fig.savefig(output_path, dpi=200)
+    plt.close(fig)
+
+
+def _faceted_business_baseline_prb_grid(
+    rows: list[dict[str, str]],
+    manifest: dict[str, object],
+    *,
+    title: str,
+    pdb_ms: int,
+    output_path: Path,
+) -> None:
+    x_field, y_field = _ratio_fields(manifest, rows)
+    rho_bg_values = [float(value) for value in manifest["rho_bg_values"]]
+    rho_pdb_values = [float(value) for value in manifest["rho_pdb_values"]]
+    background_values = [int(value) for value in manifest["explicit_background_user_count_values"]]
+    pdb_user_values = [int(value) for value in manifest["explicit_pdb_user_count_values"]]
+    values = [float(row["prb_utilization"]) for row in rows]
+    vmin = min(values) if values else 0.0
+    vmax = max(values) if values else 1.0
+    if math.isclose(vmin, vmax, rel_tol=0.0, abs_tol=1e-12):
+        padding = max(abs(vmin) * 0.01, 0.01)
+        vmin -= padding
+        vmax += padding
+    fig, axes = plt.subplots(
+        len(rho_pdb_values),
+        len(rho_bg_values),
+        figsize=(4.4 * max(len(rho_bg_values), 1), 3.7 * max(len(rho_pdb_values), 1)),
+        constrained_layout=True,
+        squeeze=False,
+    )
+    last_image = None
+    for row_index, target_rho_pdb in enumerate(rho_pdb_values):
+        for col_index, target_rho_bg in enumerate(rho_bg_values):
+            ax = axes[row_index][col_index]
+            matrix = [
+                [
+                    _business_baseline_prb_value(
+                        rows,
+                        target_rho_bg=target_rho_bg,
+                        target_rho_pdb=target_rho_pdb,
+                        pdb_ms=pdb_ms,
+                        background_user_count=background_user_count,
+                        pdb_user_count=pdb_user_count,
+                        x_field=x_field,
+                        y_field=y_field,
+                    )
+                    for background_user_count in background_values
+                ]
+                for pdb_user_count in pdb_user_values
+            ]
+            last_image = ax.imshow(matrix, aspect="auto", origin="lower", vmin=vmin, vmax=vmax, cmap="viridis")
+            last_image.cmap.set_bad(color="#d9d9d9")
+            ax.set_title(f"rho_bg={target_rho_bg:.2f}, rho_pdb={target_rho_pdb:.2f}")
+            ax.set_xticks(range(len(background_values)), labels=[str(value) for value in background_values])
+            ax.set_yticks(range(len(pdb_user_values)), labels=[str(value) for value in pdb_user_values])
+            ax.set_xlabel("background_user_count")
+            ax.set_ylabel("pdb_user_count")
+            _add_heatmap_cell_boundaries(ax, width=len(background_values), height=len(pdb_user_values))
+            _add_heatmap_cell_annotations(ax, matrix, signed=False)
+    if last_image is not None:
+        fig.colorbar(last_image, ax=axes.ravel().tolist(), shrink=0.80)
+    fig.suptitle(f"{title} (pdb_ms={pdb_ms}, cell text = percentage)")
     fig.savefig(output_path, dpi=200)
     plt.close(fig)
 
@@ -412,6 +854,13 @@ def main() -> int:
     boundary_rows_95 = _rows(output_dir / "boundary_feasibility_95.csv")
     boundary_rows_90 = _rows(output_dir / "boundary_feasibility_90.csv")
     typical_case_detail_rows = _rows(output_dir / "typical_case_details.csv")
+    per_run_rows = _per_run_rows(output_dir)
+    per_run_baseline_rows = _per_run_baseline_prb_rows(output_dir)
+    relative_packet_gain_rows = _relative_packet_gain_rows(
+        per_run_rows,
+        baseline_policy=str(manifest.get("baseline_policy", "tail_append")),
+        proposed_policy=str(manifest.get("ours_policy", "hopeless_tail_append")),
+    )
     if str(manifest.get("scan_mode", "")) == "load_ratio":
         _ratio_grid(
             scene_rows,
@@ -439,6 +888,57 @@ def main() -> int:
             threshold=0.90,
             output_path=output_dir / "capacity_boundary_90.png",
         )
+        if per_run_baseline_rows:
+            _ratio_prb_grid(
+                per_run_baseline_rows,
+                manifest,
+                title="Baseline PRB Utilization by PDB Period",
+                output_path=output_dir / "baseline_prb_utilization_by_pdb_ms.png",
+            )
+        if (
+            "explicit_background_user_count_values" in manifest
+            and "explicit_pdb_user_count_values" in manifest
+        ):
+            _business_ratio_grid(
+                scene_rows,
+                manifest,
+                field_name="mean_delta_pdb_satisfaction_rate",
+                title="Mean Paired Delta PDB Satisfaction",
+                output_path=output_dir / "business_delta_pdb_satisfaction.png",
+            )
+            _business_ratio_grid(
+                scene_rows,
+                manifest,
+                field_name="mean_center_throughput_retention",
+                title="Mean Center Throughput Retention",
+                output_path=output_dir / "business_center_throughput_retention.png",
+            )
+            for pdb_ms in [int(value) for value in manifest["pdb_ms_values"]]:
+                if relative_packet_gain_rows:
+                    _faceted_business_ratio_grid(
+                        relative_packet_gain_rows,
+                        manifest,
+                        field_name="relative_packet_gain",
+                        title="Relative Packet Gain vs Baseline Satisfied",
+                        pdb_ms=pdb_ms,
+                        output_path=output_dir / f"faceted_business_delta_pdb_satisfaction_pdb{pdb_ms}.png",
+                    )
+                _faceted_business_ratio_grid(
+                    scene_rows,
+                    manifest,
+                    field_name="mean_center_throughput_retention",
+                    title="Mean Center Throughput Retention",
+                    pdb_ms=pdb_ms,
+                    output_path=output_dir / f"faceted_business_center_throughput_retention_pdb{pdb_ms}.png",
+                )
+                if per_run_baseline_rows:
+                    _faceted_business_baseline_prb_grid(
+                        per_run_baseline_rows,
+                        manifest,
+                        title="Baseline PRB Utilization",
+                        pdb_ms=pdb_ms,
+                        output_path=output_dir / f"faceted_baseline_prb_utilization_pdb{pdb_ms}.png",
+                    )
     else:
         _heatmap_grid(
             scene_rows,

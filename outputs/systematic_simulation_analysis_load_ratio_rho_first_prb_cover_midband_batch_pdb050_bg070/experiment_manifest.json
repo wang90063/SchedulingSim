@@ -1,0 +1,106 @@
+{
+  "mode": "load_ratio",
+  "background_user_count_values": [
+    32,
+    40,
+    48
+  ],
+  "pdb_user_count_values": [
+    4,
+    8
+  ],
+  "rho_bg_values": [
+    0.07
+  ],
+  "rho_pdb_values": [
+    0.3,
+    0.4,
+    0.45
+  ],
+  "pdb_ms_values": [
+    50
+  ],
+  "capacity_reference": {
+    "background_capacity_mbps": 66.03,
+    "pdb_capacity_mbps": 8.74
+  },
+  "mapping_policy": {
+    "background": {
+      "kind": "candidate_domain_solve_period",
+      "background_user_count_values": [
+        32,
+        40,
+        48
+      ],
+      "background_packet_kb_values": [
+        1.0,
+        1.5,
+        2.0
+      ],
+      "background_period_ms_range": [
+        4.0,
+        400.0
+      ],
+      "anchor_background_user_count": 40,
+      "anchor_background_packet_kb": 2.0
+    },
+    "pdb": {
+      "kind": "candidate_domain_solve_packet",
+      "pdb_user_count_values": [
+        4,
+        8
+      ],
+      "pdb_packet_kb_range": [
+        0.1,
+        80.0
+      ],
+      "anchor_pdb_user_count": 4
+    }
+  },
+  "repeat_count": 5,
+  "random_seed_base": 7,
+  "baseline_policy": "tail_append",
+  "ours_policy": "hopeless_tail_append",
+  "scene_bank": {
+    "medium_distance_range_m": [
+      170.0,
+      230.0
+    ],
+    "good_distance_range_m": [
+      80.0,
+      140.0
+    ],
+    "poor_distance_range_m": [
+      390.0,
+      470.0
+    ]
+  },
+  "explicit_background_user_count_values": [
+    32,
+    40,
+    48
+  ],
+  "explicit_pdb_user_count_values": [
+    4,
+    8
+  ],
+  "scan_mode": "load_ratio",
+  "reference_config": "configs/systematic_simulation_analysis_load_ratio_rho_first_prb_cover_midband_batch_pdb050_bg070.json",
+  "scene_bank_counts": {
+    "medium": 24,
+    "good": 24,
+    "poor": 16
+  },
+  "boundary_feasibility_files": [
+    "boundary_feasibility_95.csv",
+    "boundary_feasibility_90.csv"
+  ],
+  "representative_case_files": [
+    "typical_case_candidates.csv",
+    "typical_case_details.csv"
+  ],
+  "reuse_output_dirs": [],
+  "reused_scene_point_count": 0,
+  "new_scene_point_count": 18,
+  "final_scene_point_count": 18
+}

@@ -1,0 +1,3 @@
+region,scene_point_count,scene_point_share,proposed_win_rate,mean_delta_pdb_satisfaction_rate,mean_center_throughput_retention,mean_delta_prb_utilization,mean_delta_center_prb_share,mean_delta_edge_prb_share
+critical,3,0.16666666666666666,0.6666666666666666,-0.0010000000000000002,1.0001077463411334,0.0,2.281057669401935e-05,-2.2810576694013795e-05
+feasible,15,0.8333333333333334,0.0,0.0,1.0,0.0,-2.934354814846755e-07,2.9343548148504556e-07

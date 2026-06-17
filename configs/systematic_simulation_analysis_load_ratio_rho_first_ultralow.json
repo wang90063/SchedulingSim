@@ -1,0 +1,97 @@
+{
+  "simulation": {
+    "cycles": 2400,
+    "slot_duration_ms": 1,
+    "tdd_pattern": "DSUUU",
+    "random_seed": 7,
+    "analysis_window_ms": 10000
+  },
+  "resources": {
+    "total_prb_per_u_slot": 273,
+    "max_ue_per_slot": 16
+  },
+  "traffic": {
+    "center": {
+      "count": 48,
+      "period_slots": 10,
+      "packet_bits": 16000,
+      "pdb_ms": null,
+      "gbr_bps": 0.0
+    },
+    "edge": {
+      "count": 16,
+      "packet_bits": 400000,
+      "pdb_ms": 100,
+      "arrival_mode": "periodic_by_pdb",
+      "initial_phase_mode": "uniform_0_to_pdb"
+    }
+  },
+  "radio": {
+    "environment": {
+      "scenario_type": "uma",
+      "cell_radius_m": 500.0,
+      "carrier_frequency_ghz": 3.5,
+      "per_prb_tx_power_dbm": 5.0,
+      "noise_figure_db": 7.0,
+      "interference_margin_db": 3.0,
+      "shadow_std_db": 4.0,
+      "slow_fading_alpha": 0.95,
+      "slot_jitter_std_db": 0.5,
+      "mcs_table_path": "mcs/nr_ul_main.json"
+    },
+    "center": {
+      "base_snr_db": 12.0,
+      "snr_min_db": 0.0,
+      "snr_max_db": 20.0
+    },
+    "edge": {
+      "base_snr_db": -2.0,
+      "snr_min_db": -8.0,
+      "snr_max_db": 4.0,
+      "edge_per_u_slot_prb_cap": 273
+    }
+  },
+  "scheduler": {
+    "ranking": "epf",
+    "reinsert_policy": "tail_append"
+  },
+  "report": {
+    "output_dir": "outputs/systematic_simulation_analysis_load_ratio_rho_first_ultralow",
+    "keep_slot_trace": false
+  },
+  "systematic_analysis": {
+    "mode": "load_ratio",
+    "rho_bg_values": [0.03, 0.05, 0.07, 0.10, 0.12],
+    "rho_pdb_values": [0.01, 0.02, 0.03, 0.05, 0.08],
+    "pdb_ms_values": [50, 100, 300, 500],
+    "capacity_reference": {
+      "background_capacity_mbps": 66.03,
+      "pdb_capacity_mbps": 8.74
+    },
+    "mapping_policy": {
+      "background": {
+        "kind": "candidate_domain_solve_period",
+        "background_user_count_values": [32, 40, 48],
+        "background_packet_kb_values": [1.0, 1.5, 2.0],
+        "background_period_ms_range": [4.0, 160.0],
+        "anchor_background_user_count": 40,
+        "anchor_background_packet_kb": 2.0
+      },
+      "pdb": {
+        "kind": "candidate_domain_solve_packet",
+        "pdb_user_count_values": [4, 8],
+        "pdb_packet_kb_range": [0.1, 80.0],
+        "anchor_pdb_user_count": 4
+      }
+    },
+    "repeat_count": 10,
+    "random_seed_base": 7,
+    "baseline_policy": "tail_append",
+    "ours_policy": "hopeless_front_insert",
+    "scene_bank": {
+      "medium_distance_range_m": [170.0, 230.0],
+      "good_distance_range_m": [80.0, 140.0],
+      "poor_distance_range_m": [390.0, 470.0]
+    }
+  }
+}

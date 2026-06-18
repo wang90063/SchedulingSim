@@ -37,7 +37,7 @@
 
 ### 运行单次仿真
 
-直接运行目标边缘用户对比场景：
+直接运行目标边缘用户对比场景（未指定策略时默认走 `hopeless_tail_append`）：
 
 ```bash
 PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json
@@ -49,6 +49,15 @@ PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json
 PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json --reinsert-policy tail_append
 PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json --reinsert-policy target_only_constrained_insert
 PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json --reinsert-policy business_aware_constrained_insert
+PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json --reinsert-policy hopeless_front_insert
+PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare.json --reinsert-policy hopeless_tail_append
+```
+
+带误块与重传的 `sionna` 后端单次仿真（需先准备 conda 环境，见下方“Sionna 无线后端”一节）：
+
+```bash
+conda activate scheduling-sim-sionna
+PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare_sionna.json
 ```
 
 输出会写到配置文件指定的目录，例如：
@@ -95,6 +104,26 @@ PYTHONPATH=src python scripts/run_target_edge_sensitivity_report.py configs/targ
 - `outputs/target_edge_sensitivity/sensitivity_rows.csv:1`
 - `outputs/target_edge_sensitivity_center1600/sensitivity_report.md:1`
 - `outputs/target_edge_sensitivity_main_400kbit_pdb500/sensitivity_report.md:1`
+
+### 运行系统化仿真分析
+
+系统化分析在统一的“场景库 + 负载比扫描”框架下，对多条回插策略做成对（paired）对比，并产出容量边界、业务保持率、`PDB` 满足率等聚合口径。先跑数据，再渲染图：
+
+```bash
+PYTHONPATH=src python scripts/run_systematic_simulation_analysis.py configs/systematic_simulation_analysis_load_ratio_rho_first_hopeless_tail_append.json
+PYTHONPATH=src python scripts/render_systematic_simulation_analysis_plots.py outputs/<对应输出目录>
+```
+
+负载比扫描有多个粒度的入口配置可选：
+
+- `configs/systematic_simulation_analysis_load_ratio_rho_first.json`：标准负载比扫描
+- `configs/systematic_simulation_analysis_load_ratio_rho_first_hopeless_tail_append.json`：纳入 `hopeless_tail_append` 策略对比
+- `configs/systematic_simulation_analysis_load_ratio_rho_first_lowload.json` / `..._ultralow.json`：低 / 超低负载段
+- `configs/systematic_simulation_analysis_load_ratio_rho_first_prb_cover_midband_merge.json`：`PRB` 覆盖中频段的合并扫描
+
+- 运行脚本读取配置里的 `systematic_analysis` 块（场景库构成、负载比/`PDB` 扫描点、参与对比的策略等），把每个 case 的原始 summary、成对行、容量边界与场景汇总写到配置指定的 `report.output_dir`
+- 渲染脚本接收上一步的输出目录，生成容量边界、业务吞吐保持率、`PDB` 满足率增量等图表
+- 大规模扫描可拆成 `*_batch_*.json` 分批跑，再用对应的 `*_merge.json` 合并复用已有的 `raw_summaries.json`，避免重复仿真
 
 ### 运行测试
 
@@ -223,17 +252,21 @@ PYTHONPATH=src python -m scheduling_sim.cli run configs/target_edge_compare_sion
 
 ### 回插策略
 
-CLI 当前支持以下策略：
+CLI 当前支持以下策略（`--reinsert-policy`）：
 
 - `tail_append`
 - `constrained_insert`
 - `target_only_constrained_insert`
 - `business_aware_constrained_insert`
+- `hopeless_front_insert`
+- `hopeless_tail_append`
 
 其中当前最值得关注的是两类：
 
 - 基线：`tail_append`
-- 我们的方法：`business_aware_constrained_insert`
+- 我们的方法（默认）：`hopeless_tail_append`
+
+`hopeless_front_insert` 与 `hopeless_tail_append` 是在受约束回插之上对“已经无望赶上 `PDB`”的包做不同兜底处置：前者把无望包前插（尽量先发完释放队列），后者把无望包退回队尾（优先保住仍有希望的包）。两者都继承受约束回插的安全判定，只在“所有位置都不安全”时分流，便于对比兜底策略对整体满足率的影响。当配置未显式指定 `reinsert_policy` 时，默认采用 `hopeless_tail_append`。
 
 ### 典型实验场景
 
@@ -274,6 +307,10 @@ CLI 当前支持以下策略：
   - `target_edge_time_to_first_service_ms`
   - `target_edge_pdb_met`
   - `target_edge_remaining_bits`
+  - `target_edge_retransmission_count`
+- 误块与重传口径（`sionna` 后端下才非零）
+  - `retransmission_count` / `center_retransmission_count` / `edge_retransmission_count`
+  - `wasted_prb` / `center_wasted_prb` / `edge_wasted_prb`
 
 ## 仓库结构
 
@@ -323,6 +360,9 @@ CLI 当前支持以下策略：
 - 平台模块结构：`docs/superpowers/specs/2026-04-13-platform-module-structure.md:1`
 - Target edge case study：`docs/superpowers/specs/2026-04-13-target-edge-case-study.md:1`
 - 业务指标报告设计：`docs/superpowers/specs/2026-04-13-business-kpi-report-design.md:1`
+- 系统化仿真分析设计：`docs/superpowers/specs/2026-06-11-systematic-simulation-analysis-design.md:1`
+- 负载比扫描与 rho-first 映射：`docs/superpowers/specs/2026-06-15-rho-first-load-ratio-mapping-design.md:1`
+- Hopeless 兜底回插策略：`docs/superpowers/specs/2026-06-16-hopeless-tail-append-policy-design.md:1`
 
 ## 当前边界
 

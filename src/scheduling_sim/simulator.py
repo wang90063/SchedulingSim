@@ -36,10 +36,10 @@ class UlSimulator:
             self.reinsert = TargetOnlyConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
         elif config.scheduler.reinsert_policy == "hopeless_front_insert":
             self.reinsert = HopelessFrontInsertPolicy(deadline_guard_ms=deadline_guard_ms)
-        elif config.scheduler.reinsert_policy == "hopeless_tail_append":
-            self.reinsert = HopelessTailAppendPolicy(deadline_guard_ms=deadline_guard_ms)
-        else:
+        elif config.scheduler.reinsert_policy in ("constrained_insert", "business_aware_constrained_insert"):
             self.reinsert = ConstrainedInsertPolicy(deadline_guard_ms=deadline_guard_ms)
+        else:
+            self.reinsert = HopelessTailAppendPolicy(deadline_guard_ms=deadline_guard_ms)
         self._wireless_env_injected = wireless_env is not None
         self.wireless_env = wireless_env or self._build_wireless_env()
         reset_users = self.users if self._wireless_env_injected else self._dynamic_radio_users()

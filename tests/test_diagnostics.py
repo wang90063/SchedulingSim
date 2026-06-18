@@ -124,7 +124,7 @@ class TestUlSimulatorDiagnostics(unittest.TestCase):
         target = _make_target(bits_per_prb=1000)
         config = SimpleNamespace(
             resources=SimpleNamespace(total_prb_per_u_slot=1, max_ue_per_slot=1),
-            simulation=SimpleNamespace(deadline_guard_ms=0),
+            simulation=SimpleNamespace(deadline_guard_ms=0, slot_duration_ms=1),
             scheduler=SimpleNamespace(reinsert_policy="tail_append"),
         )
         collector = TargetEdgeDiagnosticCollector(policy="tail_append")
